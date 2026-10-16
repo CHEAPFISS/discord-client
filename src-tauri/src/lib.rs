@@ -3,10 +3,40 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+/// Отправитель сообщений Gateway (op 4, heartbeat и т.д.) — bridges команды к ws-задаче.
+pub struct GatewaySender {
+    pub tx: tokio::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>>,
+}
+
+impl GatewaySender {
+    pub fn new() -> Self {
+        Self { tx: tokio::sync::Mutex::new(None) }
+    }
+
+    pub async fn send(&self, payload: serde_json::Value) -> Result<(), String> {
+        let guard = self.tx.lock().await;
+        let sender = guard.as_ref().ok_or("Gateway не подключен")?;
+        sender.send(payload).map_err(|e| e.to_string())
+    }
+}
+
 // --- Состояние приложения ---
 
 pub struct DiscordState {
     pub session: Mutex<Option<DiscordSession>>,
+    /// Данные активного голосового подключения (session_id/token/endpoint приходят асинхронно).
+    pub voice: Mutex<Option<VoiceData>>,
+}
+
+/// Цель подключения к голосовому каналу + собранные данные авторизации.
+#[derive(Debug, Clone)]
+pub struct VoiceData {
+    pub guild_id: String,
+    pub channel_id: String,
+    pub user_id: String,
+    pub session_id: Option<String>,
+    pub token: Option<String>,
+    pub endpoint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +50,7 @@ impl Default for DiscordState {
     fn default() -> Self {
         Self {
             session: Mutex::new(None),
+            voice: Mutex::new(None),
         }
     }
 }

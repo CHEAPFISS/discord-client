@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use discord_client::{Channel, ChatMessage, DiscordState, Guild};
+use discord_client::{Channel, ChatMessage, DiscordState, GatewaySender, Guild};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
@@ -17,7 +17,11 @@ const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
 static GATEWAY_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[command]
-async fn connect_gateway(app: AppHandle, state: State<'_, DiscordState>) -> Result<String, String> {
+async fn connect_gateway(
+    app: AppHandle,
+    state: State<'_, DiscordState>,
+    sender: State<'_, GatewaySender>,
+) -> Result<String, String> {
     use std::sync::atomic::Ordering;
 
     if GATEWAY_RUNNING.swap(true, Ordering::SeqCst) {
@@ -26,9 +30,11 @@ async fn connect_gateway(app: AppHandle, state: State<'_, DiscordState>) -> Resu
     }
 
     let token = state.token().ok_or("Не залогинен")?;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *sender.tx.lock().await = Some(tx);
 
     tokio::spawn(async move {
-        let _ = gateway_loop(app.clone(), token).await;
+        let _ = gateway_loop(app.clone(), token, rx).await;
         GATEWAY_RUNNING.store(false, Ordering::SeqCst);
     });
 
@@ -36,15 +42,18 @@ async fn connect_gateway(app: AppHandle, state: State<'_, DiscordState>) -> Resu
 }
 
 /// Бесконечный цикл соединения с ретраями.
-async fn gateway_loop(app: AppHandle, token: String) -> Result<(), String> {
+async fn gateway_loop(
+    app: AppHandle,
+    token: String,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) -> Result<(), String> {
     loop {
-        match gateway_once(&app, &token).await {
+        match gateway_once(&app, &token, &mut rx).await {
             Ok(_) => {
                 log::info!("Gateway: закрыто штатно, переподключение через 3с");
             }
             Err(e) => {
                 log::warn!("Gateway: ошибка {e}, переподключение через 5с");
-                // emit события для UI
                 let _ = app.emit("gateway_status", json!({"status": "reconnecting", "error": e}));
             }
         }
@@ -52,7 +61,11 @@ async fn gateway_loop(app: AppHandle, token: String) -> Result<(), String> {
     }
 }
 
-async fn gateway_once(app: &AppHandle, token: &str) -> Result<(), String> {
+async fn gateway_once(
+    app: &AppHandle,
+    token: &str,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) -> Result<(), String> {
     use tokio_tungstenite::tungstenite::Message;
 
     let (ws, _) = tokio_tungstenite::connect_async(GATEWAY_URL)
@@ -103,6 +116,16 @@ async fn gateway_once(app: &AppHandle, token: &str) -> Result<(), String> {
                     return Err("heartbeat send failed".into());
                 }
             }
+            out = rx.recv() => {
+                match out {
+                    Some(payload) => {
+                        if write.send(Message::Text(payload.to_string())).await.is_err() {
+                            return Err("outgoing send failed".into());
+                        }
+                    }
+                    None => { return Err("командный канал закрылся".into()); }
+                }
+            }
             msg = read.next() => {
                 let msg = msg.ok_or("поток закрылся")?;
                 let text = match msg.map_err(|e| e.to_string())? {
@@ -118,7 +141,6 @@ async fn gateway_once(app: &AppHandle, token: &str) -> Result<(), String> {
                 match op {
                     11 => { /* HEARTBEAT ACK */ }
                     7 | 9 => {
-                        // RECONNECT / INVALID_SESSION — пересоздаём соединение
                         return Err(format!("gateway требует реконнект (op {op})"));
                     }
                     _ => {}
@@ -127,22 +149,84 @@ async fn gateway_once(app: &AppHandle, token: &str) -> Result<(), String> {
                     last_seq = Some(s);
                 }
                 let t = v["t"].as_str().unwrap_or("");
-                if t == "READY" {
-                    let _ = app.emit("gateway_status", json!({"status": "ready"}));
-                }
-                if t == "MESSAGE_CREATE" {
-                    let d = &v["d"];
-                    if d["type"].as_u64().unwrap_or(0) == 0 {
-                        let payload = json!({
-                            "id": d["id"],
-                            "channel_id": d["channel_id"],
-                            "author": d["author"]["username"],
-                            "content": d["content"],
-                            "timestamp": d["timestamp"],
-                        });
-                        let _ = app.emit("message_create", payload);
+                match t {
+                    "READY" => {
+                        let _ = app.emit("gateway_status", json!({"status": "ready"}));
                     }
+                    "MESSAGE_CREATE" => {
+                        let d = &v["d"];
+                        if d["type"].as_u64().unwrap_or(0) == 0 {
+                            let payload = json!({
+                                "id": d["id"],
+                                "channel_id": d["channel_id"],
+                                "author": d["author"]["username"],
+                                "content": d["content"],
+                                "timestamp": d["timestamp"],
+                            });
+                            let _ = app.emit("message_create", payload);
+                        }
+                    }
+                    "VOICE_STATE_UPDATE" => {
+                        handle_voice_state(app, &v["d"]).await;
+                    }
+                    "VOICE_SERVER_UPDATE" => {
+                        handle_voice_server(app, &v["d"]).await;
+                    }
+                    _ => {}
                 }
+            }
+        }
+    }
+}
+
+/// Накапливает данные голосового подключения; когда все три есть — готово.
+async fn handle_voice_state(app: &AppHandle, d: &serde_json::Value) {
+    let state: State<'_, DiscordState> = app.state();
+    let mut guard = state.voice.lock().unwrap();
+    if let Some(voice) = guard.as_mut() {
+        if d["guild_id"].as_str() == Some(voice.guild_id.as_str())
+            && d["user_id"].as_str() == Some(voice.user_id.as_str())
+        {
+            let session_id = d["session_id"].as_str().unwrap_or("").to_string();
+            if !session_id.is_empty() {
+                voice.session_id = Some(session_id);
+            }
+            if voice.session_id.is_some() && voice.token.is_some() && voice.endpoint.is_some() {
+                let payload = json!({
+                    "guild_id": voice.guild_id,
+                    "channel_id": voice.channel_id,
+                    "session_id": voice.session_id,
+                    "token": voice.token,
+                    "endpoint": voice.endpoint,
+                });
+                log::info!("Голосовое подключение собрано: {payload}");
+                let _ = app.emit("voice_channel_ready", payload);
+            }
+        }
+    }
+}
+
+async fn handle_voice_server(app: &AppHandle, d: &serde_json::Value) {
+    let state: State<'_, DiscordState> = app.state();
+    let mut guard = state.voice.lock().unwrap();
+    if let Some(voice) = guard.as_mut() {
+        if d["guild_id"].as_str() == Some(voice.guild_id.as_str()) {
+            if let Some(token) = d["token"].as_str() {
+                voice.token = Some(token.to_string());
+            }
+            if let Some(endpoint) = d["endpoint"].as_str() {
+                voice.endpoint = Some(endpoint.trim_start_matches("wss://").to_string());
+            }
+            if voice.session_id.is_some() && voice.token.is_some() && voice.endpoint.is_some() {
+                let payload = json!({
+                    "guild_id": voice.guild_id,
+                    "channel_id": voice.channel_id,
+                    "session_id": voice.session_id,
+                    "token": voice.token,
+                    "endpoint": voice.endpoint,
+                });
+                log::info!("Голосовое подключение собрано: {payload}");
+                let _ = app.emit("voice_channel_ready", payload);
             }
         }
     }
@@ -474,14 +558,74 @@ async fn get_channels(
 
 #[command]
 async fn join_voice_channel(
-    _app: AppHandle,
-    _state: State<'_, DiscordState>,
+    app: AppHandle,
+    state: State<'_, DiscordState>,
+    sender: State<'_, GatewaySender>,
     channel_id: String,
     guild_id: String,
 ) -> Result<(), String> {
-    // TODO: подключение к голосовому каналу через WebRTC мост
-    let _ = (channel_id, guild_id);
-    Err("Голос ещё не реализован".into())
+    // user_id берём из сессии
+    let user_id = {
+        let guard = state.session.lock().unwrap();
+        guard.as_ref().ok_or("Не залогинен")?.user_id.clone()
+    };
+
+    // фиксируем цель голосового подключения
+    {
+        let mut voice = state.voice.lock().unwrap();
+        *voice = Some(discord_client::VoiceData {
+            guild_id: guild_id.clone(),
+            channel_id: channel_id.clone(),
+            user_id: user_id.clone(),
+            session_id: None,
+            token: None,
+            endpoint: None,
+        });
+    }
+
+    // op 4 — обновить голосовое состояние (Discord пришлёт VOICE_SERVER_UPDATE/STATE)
+    let op4 = json!({
+        "op": 4,
+        "d": {
+            "guild_id": guild_id,
+            "channel_id": channel_id,
+            "self_mute": false,
+            "self_deaf": false
+        }
+    });
+    sender.send(op4).await?;
+
+    // уведомление UI
+    let _ = app.emit("voice_status", json!({"status": "joining"}));
+    Ok(())
+}
+
+#[command]
+async fn leave_voice_channel(
+    app: AppHandle,
+    state: State<'_, DiscordState>,
+    sender: State<'_, GatewaySender>,
+) -> Result<(), String> {
+    let guild_id = {
+        let mut voice = state.voice.lock().unwrap();
+        let guild = voice.as_ref().map(|v| v.guild_id.clone());
+        *voice = None;
+        guild
+    };
+    if let Some(guild_id) = guild_id {
+        let op4 = json!({
+            "op": 4,
+            "d": {
+                "guild_id": guild_id,
+                "channel_id": null,
+                "self_mute": false,
+                "self_deaf": false
+            }
+        });
+        sender.send(op4).await.ok();
+    }
+    let _ = app.emit("voice_status", json!({"status": "left"}));
+    Ok(())
 }
 
 // --- Точка входа ---
@@ -491,6 +635,7 @@ fn main() {
 
     tauri::Builder::default()
         .manage(DiscordState::load_or_default())
+        .manage(GatewaySender::new())
         .invoke_handler(generate_handler![
             start_login,
             login_with_token,
@@ -501,7 +646,8 @@ fn main() {
             get_messages,
             send_message,
             connect_gateway,
-            join_voice_channel
+            join_voice_channel,
+            leave_voice_channel
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
