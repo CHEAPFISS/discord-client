@@ -70,6 +70,15 @@ pub struct Channel {
     pub kind: u8,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatMessage {
+    pub id: String,
+    pub channel_id: String,
+    pub author: String,
+    pub content: String,
+    pub timestamp: String,
+}
+
 // --- Конфиг OAuth (client_id / client_secret) ---
 
 #[derive(Debug, Clone, Deserialize)]

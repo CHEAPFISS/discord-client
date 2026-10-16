@@ -211,6 +211,7 @@
 
   <script>
     const invoke = window.__TAURI__?.core?.invoke;
+    const listen = window.__TAURI__?.event?.listen;
     const toast = document.getElementById('errorToast');
 
     function showError(msg) {
@@ -237,6 +238,7 @@
     const voiceChannelName = document.getElementById('voiceChannelName');
 
     let currentGuildId = null;
+    let currentChannelId = null;
 
     function showApp(username) {
       loginScreen.style.display = 'none';
@@ -251,6 +253,8 @@
       try {
         const me = await invoke('get_me');
         showApp(me.username);
+        // запускаем Gateway WebSocket для живых сообщений
+        invoke('connect_gateway').catch(e => console.warn('gateway:', e));
       } catch (e) {
         // не залогинен — остаёмся на экране входа
       }
@@ -262,6 +266,7 @@
       try {
         const res = await invoke('start_login');
         showApp(res.username);
+        invoke('connect_gateway').catch(e => console.warn('gateway:', e));
       } catch (e) {
         loginStatus.textContent = String(e);
         showError(String(e));
@@ -317,14 +322,37 @@
       }
     }
 
+    function fmtTime(ts) {
+      if (!ts) return '';
+      const d = new Date(ts);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function appendMessage(msg) {
+      const div = document.createElement('div');
+      div.className = 'message';
+      div.innerHTML = `<span class="author"></span> <span class="time"></span><div class="text"></div>`;
+      div.querySelector('.author').textContent = msg.author;
+      div.querySelector('.time').textContent = fmtTime(msg.timestamp);
+      div.querySelector('.text').textContent = msg.content;
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
     async function openTextChannel(channel) {
       chatHeader.textContent = '# ' + channel.name;
       messagesEl.innerHTML = '';
-      // TODO Этап 2: Gateway WebSocket и реальная история сообщений
-      const div = document.createElement('div');
-      div.style.color = '#8e9297';
-      div.textContent = 'История сообщений появится в Этапе 2 (Gateway WebSocket)';
-      messagesEl.appendChild(div);
+      currentChannelId = channel.id;
+      try {
+        const history = await invoke('get_messages', { channelId: channel.id });
+        history.forEach(appendMessage);
+      } catch (e) {
+        messagesEl.innerHTML = '';
+        const div = document.createElement('div');
+        div.style.color = '#8e9297';
+        div.textContent = 'Не удалось загрузить историю: ' + e;
+        messagesEl.appendChild(div);
+      }
     }
 
     async function joinVoice(channel) {
@@ -339,13 +367,30 @@
 
     document.getElementById('hangupBtn').onclick = () => voiceCall.classList.remove('active');
 
-    messageInput.addEventListener('keypress', (e) => {
+    messageInput.addEventListener('keypress', async (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        // TODO Этап 2: отправка сообщений
+        const text = messageInput.value.trim();
+        if (!text || !currentChannelId) return;
         messageInput.value = '';
+        try {
+          const msg = await invoke('send_message', { channelId: currentChannelId, content: text });
+          appendMessage(msg);
+        } catch (err) {
+          showError('Не отправилось: ' + err);
+        }
       }
     });
+
+    // Живой поток новых сообщений от Gateway
+    if (listen) {
+      listen('message_create', (event) => {
+        const msg = event.payload;
+        if (currentChannelId && msg.channel_id === currentChannelId) {
+          appendMessage(msg);
+        }
+      });
+    }
 
     // Автовосстановление сессии при загрузке
     tryRestoreSession();

@@ -1,12 +1,217 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use discord_client::{Channel, DiscordState, Guild};
+use discord_client::{Channel, ChatMessage, DiscordState, Guild};
+use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
-use tauri::{command, generate_context, generate_handler, AppHandle, Manager, State};
+use serde_json::json;
+use tauri::{command, generate_context, generate_handler, AppHandle, Emitter, Manager, State};
 use tokio::io::AsyncReadExt;
 
 const API_BASE: &str = "https://discord.com/api/v10";
 const REDIRECT_URI: &str = "http://localhost:1436/callback";
+const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
+
+// --- Gateway WebSocket ---
+
+/// Защита от повторного запуска: только одно соединение за раз.
+static GATEWAY_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[command]
+async fn connect_gateway(app: AppHandle, state: State<'_, DiscordState>) -> Result<String, String> {
+    use std::sync::atomic::Ordering;
+
+    if GATEWAY_RUNNING.swap(true, Ordering::SeqCst) {
+        // уже запущен — считаем это успехом
+        return Ok("already-running".into());
+    }
+
+    let token = state.token().ok_or("Не залогинен")?;
+
+    tokio::spawn(async move {
+        let _ = gateway_loop(app.clone(), token).await;
+        GATEWAY_RUNNING.store(false, Ordering::SeqCst);
+    });
+
+    Ok("started".into())
+}
+
+/// Бесконечный цикл соединения с ретраями.
+async fn gateway_loop(app: AppHandle, token: String) -> Result<(), String> {
+    loop {
+        match gateway_once(&app, &token).await {
+            Ok(_) => {
+                log::info!("Gateway: закрыто штатно, переподключение через 3с");
+            }
+            Err(e) => {
+                log::warn!("Gateway: ошибка {e}, переподключение через 5с");
+                // emit события для UI
+                let _ = app.emit("gateway_status", json!({"status": "reconnecting", "error": e}));
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+}
+
+async fn gateway_once(app: &AppHandle, token: &str) -> Result<(), String> {
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (ws, _) = tokio_tungstenite::connect_async(GATEWAY_URL)
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+
+    let (mut write, mut read) = ws.split();
+
+    // 1) жду HELLO (op 10) с heartbeat_interval
+    let mut last_seq: Option<u64> = None;
+    let heartbeat_ms = loop {
+        let msg = read.next().await.ok_or("поток закрылся")?;
+        let msg = msg.map_err(|e| e.to_string())?;
+        if let Message::Text(text) = msg {
+            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            if v["op"].as_u64() == Some(10) {
+                break v["d"]["heartbeat_interval"].as_u64().unwrap_or(45000);
+            }
+        }
+    };
+
+    // 2) Identify (user-токен, без intents)
+    let identify = json!({
+        "op": 2,
+        "d": {
+            "token": token,
+            "properties": {"os": "linux", "browser": "discord-client", "device": "discord-client"},
+            "compress": false
+        }
+    });
+    write
+        .send(Message::Text(identify.to_string()))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let _ = app.emit("gateway_status", json!({"status": "connected"}));
+    log::info!("Gateway: подключен, heartbeat {heartbeat_ms}мс");
+
+    // 3) heartbeat + приём событий
+    let mut hb = tokio::time::interval(std::time::Duration::from_millis(heartbeat_ms));
+    hb.tick().await; // первый tick срабатывает сразу
+
+    loop {
+        tokio::select! {
+            _ = hb.tick() => {
+                let hb = json!({"op": 1, "d": last_seq});
+                if write.send(Message::Text(hb.to_string())).await.is_err() {
+                    return Err("heartbeat send failed".into());
+                }
+            }
+            msg = read.next() => {
+                let msg = msg.ok_or("поток закрылся")?;
+                let text = match msg.map_err(|e| e.to_string())? {
+                    Message::Text(t) => t,
+                    Message::Ping(_) | Message::Pong(_) => continue,
+                    _ => continue,
+                };
+                let v: serde_json::Value = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let op = v["op"].as_u64().unwrap_or(0);
+                match op {
+                    11 => { /* HEARTBEAT ACK */ }
+                    7 | 9 => {
+                        // RECONNECT / INVALID_SESSION — пересоздаём соединение
+                        return Err(format!("gateway требует реконнект (op {op})"));
+                    }
+                    _ => {}
+                }
+                if let Some(s) = v["s"].as_u64() {
+                    last_seq = Some(s);
+                }
+                let t = v["t"].as_str().unwrap_or("");
+                if t == "READY" {
+                    let _ = app.emit("gateway_status", json!({"status": "ready"}));
+                }
+                if t == "MESSAGE_CREATE" {
+                    let d = &v["d"];
+                    if d["type"].as_u64().unwrap_or(0) == 0 {
+                        let payload = json!({
+                            "id": d["id"],
+                            "channel_id": d["channel_id"],
+                            "author": d["author"]["username"],
+                            "content": d["content"],
+                            "timestamp": d["timestamp"],
+                        });
+                        let _ = app.emit("message_create", payload);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// --- История и отправка сообщений ---
+
+#[command]
+async fn get_messages(
+    state: State<'_, DiscordState>,
+    channel_id: String,
+) -> Result<Vec<ChatMessage>, String> {
+    let token = state.token().ok_or("Не залогинен")?;
+    let client = reqwest::Client::new();
+    let resp: serde_json::Value = client
+        .get(format!("{API_BASE}/channels/{channel_id}/messages"))
+        .query(&[("limit", "50")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Ошибка запроса истории: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("Ошибка разбора истории: {e}"))?;
+
+    let mut out = Vec::new();
+    if let Some(arr) = resp.as_array() {
+        for m in arr {
+            out.push(ChatMessage {
+                id: m["id"].as_str().unwrap_or("").to_string(),
+                channel_id: channel_id.clone(),
+                author: m["author"]["username"].as_str().unwrap_or("").to_string(),
+                content: m["content"].as_str().unwrap_or("").to_string(),
+                timestamp: m["timestamp"].as_str().unwrap_or("").to_string(),
+            });
+        }
+    }
+    // API возвращает новые→старые; реверсим для отображения
+    out.reverse();
+    Ok(out)
+}
+
+#[command]
+async fn send_message(
+    state: State<'_, DiscordState>,
+    channel_id: String,
+    content: String,
+) -> Result<ChatMessage, String> {
+    let token = state.token().ok_or("Не залогинен")?;
+    let client = reqwest::Client::new();
+    let resp: serde_json::Value = client
+        .post(format!("{API_BASE}/channels/{channel_id}/messages"))
+        .bearer_auth(token)
+        .json(&json!({"content": content}))
+        .send()
+        .await
+        .map_err(|e| format!("Ошибка отправки: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("Ошибка разбора ответа отправки: {e}"))?;
+
+    Ok(ChatMessage {
+        id: resp["id"].as_str().unwrap_or("").to_string(),
+        channel_id,
+        author: resp["author"]["username"].as_str().unwrap_or("").to_string(),
+        content: resp["content"].as_str().unwrap_or("").to_string(),
+        timestamp: resp["timestamp"].as_str().unwrap_or("").to_string(),
+    })
+}
 
 // --- OAuth ---
 
@@ -225,6 +430,9 @@ fn main() {
             get_me,
             get_guilds,
             get_channels,
+            get_messages,
+            send_message,
+            connect_gateway,
             join_voice_channel
         ])
         .setup(|app| {
