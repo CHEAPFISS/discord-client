@@ -13,10 +13,7 @@
       height: 100vh;
       overflow: hidden;
     }
-    #app {
-      display: flex;
-      height: 100%;
-    }
+    #app { display: flex; height: 100%; }
     .sidebar {
       width: 260px;
       background: #2f3136;
@@ -24,105 +21,101 @@
       flex-direction: column;
       border-right: 1px solid #202225;
     }
-    .servers {
-      padding: 20px 0;
-      overflow-y: auto;
+    .sidebar-header {
+      padding: 16px;
+      font-weight: bold;
+      border-bottom: 1px solid #202225;
     }
+    .servers { padding: 20px 0; overflow-y: auto; }
     .server-item {
-      width: 60px;
-      height: 60px;
+      width: 60px; height: 60px;
       border-radius: 50%;
       margin: 0 auto 16px;
       cursor: pointer;
       background: #4f545c;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; font-weight: bold; color: #fff;
+      transition: border-radius .15s;
     }
-    .server-item.active { background: #7289da; }
-    .channels {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px;
-    }
-    .channel-list {
-      margin-bottom: 24px;
+    .server-item:hover, .server-item.active { border-radius: 16px; background: #5865f2; }
+    .channels { flex: 1; overflow-y: auto; padding: 16px; background: #2f3136; }
+    .channel-category {
+      padding: 8px 8px 4px;
+      font-size: 12px; font-weight: bold;
+      text-transform: uppercase;
+      color: #8e9297;
     }
     .channel-item {
-      padding: 8px 16px;
+      padding: 8px 12px;
       cursor: pointer;
       border-radius: 4px;
       margin: 2px 0;
       font-size: 15px;
+      color: #96989d;
     }
-    .channel-item:hover { background: #4f545c; }
-    .channel-item.voice { color: #8e9297; }
+    .channel-item:hover { background: #3c3f45; color: #dcddde; }
+    .channel-item.active { background: #42464d; color: #fff; }
+    .channel-item.voice::before { content: '🔊 '; font-size: 13px; }
+    .channel-item.text::before { content: '# '; opacity: .6; }
     .chat {
       flex: 1;
       display: flex;
       flex-direction: column;
       background: #36393f;
     }
-    .messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 24px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-    .message {
-      max-width: 60%;
+    .chat-header {
       padding: 12px 16px;
-      border-radius: 8px;
-      background: #40444b;
-      font-size: 15px;
-      line-height: 1.4;
+      border-bottom: 1px solid #202225;
+      font-weight: bold;
     }
-    .message-me { align-self: flex-end; background: #7289da; color: white; }
+    .messages { flex: 1; overflow-y: auto; padding: 24px; }
+    .message { margin-bottom: 16px; }
+    .message .author { color: #00aff4; font-weight: bold; font-size: 14px; }
+    .message .text { font-size: 15px; line-height: 1.4; word-wrap: break-word; }
+    .message .time { color: #72767d; font-size: 11px; margin-left: 8px; }
     .input-area {
-      padding: 16px;
-      border-top: 1px solid #40444b;
-      background: #40444b;
+      padding: 0 16px 24px;
     }
     .input-wrapper {
       display: flex;
       gap: 8px;
-      max-width: 800px;
-      margin: 0 auto;
+      background: #40444b;
+      border-radius: 8px;
+      padding: 10px 12px;
     }
     textarea {
       flex: 1;
-      padding: 12px 16px;
-      border-radius: 8px;
+      background: transparent;
       border: none;
-      background: #4f545c;
-      color: white;
+      outline: none;
+      color: #fff;
       font-family: inherit;
       font-size: 15px;
       resize: none;
     }
-    button.send {
-      width: 40px;
-      height: 40px;
-      border-radius: 8px;
-      background: #7289da;
-      border: none;
-      cursor: pointer;
-      color: white;
-      font-size: 18px;
+    .user-area {
+      padding: 8px 16px;
+      background: #292b2f;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+    }
+    .avatar {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      background: #5865f2;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: bold; color: #fff; font-size: 13px;
     }
     .login-screen {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      text-align: center;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      height: 100vh; text-align: center;
     }
-    .login-screen h1 { margin-bottom: 24px; font-size: 32px; }
+    .login-screen h1 { margin-bottom: 12px; font-size: 32px; }
+    .login-screen p { margin-bottom: 32px; color: #b9bbbe; }
     .login-btn {
-      padding: 12px 32px;
+      padding: 14px 32px;
       font-size: 16px;
       border-radius: 4px;
       border: none;
@@ -131,121 +124,151 @@
       cursor: pointer;
     }
     .login-btn:hover { background: #4752c4; }
+    .login-btn:disabled { background: #4f545c; cursor: wait; }
+    .login-status { margin-top: 16px; color: #8e9297; font-size: 13px; white-space: pre-wrap; max-width: 500px; }
     .voice-call {
       position: fixed;
-      bottom: 24px;
+      bottom: 80px;
       right: 24px;
-      width: 280px;
+      width: 260px;
       background: #2f3136;
-      border: 1px solid #40444b;
-      border-radius: 12px;
+      border-radius: 8px;
       padding: 16px;
       display: none;
       flex-direction: column;
       gap: 12px;
+      box-shadow: 0 8px 16px rgba(0,0,0,.24);
     }
     .voice-call.active { display: flex; }
-    .voice-call h3 { margin-bottom: 8px; font-size: 16px; }
-    .voice-controls {
-      display: flex;
-      gap: 12px;
-      justify-content: center;
-    }
+    .voice-call h3 { font-size: 15px; }
+    .voice-controls { display: flex; gap: 8px; }
     .voice-btn {
-      width: 48px;
-      height: 48px;
-      border-radius: 50%;
+      flex: 1;
+      height: 40px;
+      border-radius: 6px;
       border: none;
       cursor: pointer;
-      font-size: 20px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      background: #4f545c;
+      color: #fff;
+      font-size: 16px;
     }
-    .voice-btn.mic-off { background: #ed4245; color: white; }
-    .voice-btn.deaf { background: #faa61a; color: white; }
-    .voice-btn.hangup { background: #ed4245; color: white; }
+    .voice-btn.hangup { background: #ed4245; }
+    .error-toast {
+      position: fixed;
+      top: 16px; left: 50%;
+      transform: translateX(-50%);
+      background: #ed4245;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 6px;
+      font-size: 14px;
+      white-space: pre-wrap;
+      max-width: 80%;
+      z-index: 100;
+      cursor: pointer;
+      display: none;
+    }
   </style>
 </head>
 <body>
+  <div id="errorToast" class="error-toast"></div>
+
   <div id="login" class="login-screen">
     <h1>Discord Client</h1>
     <p>Лёгкий клиент для звонков и чата</p>
     <button class="login-btn" id="loginBtn">Войти через Discord</button>
+    <div class="login-status" id="loginStatus"></div>
   </div>
 
   <div id="app" style="display: none;">
     <div class="sidebar">
+      <div class="sidebar-header" id="username">…</div>
       <div class="servers" id="servers"></div>
     </div>
-    <div class="channels" id="channels">
-      <div class="channel-list" id="channelList"></div>
-    </div>
+    <div class="channels" id="channels"></div>
     <div class="chat">
+      <div class="chat-header" id="chatHeader">Выбери канал</div>
       <div class="messages" id="messages"></div>
       <div class="input-area">
         <div class="input-wrapper">
           <textarea id="messageInput" rows="1" placeholder="Сообщение..."></textarea>
-          <button class="send" id="sendBtn">▶</button>
         </div>
       </div>
+    </div>
+    <div class="user-area">
+      <div class="avatar" id="avatar">?</div>
+      <div id="userAreaName">…</div>
     </div>
     <div class="voice-call" id="voiceCall">
       <h3 id="voiceChannelName">Голосовой канал</h3>
       <div class="voice-controls">
-        <button class="voice-btn mic-off" id="micBtn">🎙</button>
-        <button class="voice-btn deaf" id="deafBtn">🔇</button>
-        <button class="voice-btn hangup" id="hangupBtn">📞</button>
+        <button class="voice-btn" title="Микрофон">🎙</button>
+        <button class="voice-btn" title="Звук">🔊</button>
+        <button class="voice-btn hangup" id="hangupBtn" title="Отключиться">📴</button>
       </div>
     </div>
   </div>
 
-  <script type="module">
-    import { invoke } from '@tauri-apps/api/tauri';
+  <script>
+    const invoke = window.__TAURI__?.core?.invoke;
+    const toast = document.getElementById('errorToast');
+
+    function showError(msg) {
+      if (!toast) return alert(msg);
+      toast.textContent = msg;
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 8000);
+      toast.onclick = () => { toast.style.display = 'none'; };
+    }
 
     const loginScreen = document.getElementById('login');
-    const app = document.getElementById('app');
+    const appEl = document.getElementById('app');
     const loginBtn = document.getElementById('loginBtn');
+    const loginStatus = document.getElementById('loginStatus');
     const serversEl = document.getElementById('servers');
-    const channelListEl = document.getElementById('channelList');
+    const channelsEl = document.getElementById('channels');
     const messagesEl = document.getElementById('messages');
+    const chatHeader = document.getElementById('chatHeader');
     const messageInput = document.getElementById('messageInput');
-    const sendBtn = document.getElementById('sendBtn');
+    const usernameEl = document.getElementById('username');
+    const avatarEl = document.getElementById('avatar');
+    const userAreaNameEl = document.getElementById('userAreaName');
     const voiceCall = document.getElementById('voiceCall');
     const voiceChannelName = document.getElementById('voiceChannelName');
 
     let currentGuildId = null;
 
-    loginBtn.addEventListener('click', async () => {
-      // Открываем OAuth URL Discord
-      const clientId = 'YOUR_CLIENT_ID';
-      const redirectUri = 'http://localhost:1420/callback';
-      const scope = 'identify guilds';
-      const url = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}`;
-      window.location.href = url;
-    });
-
-    // Проверка callbacks URL (упрощённо)
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    if (code) {
-      await handleLogin(code);
+    function showApp(username) {
+      loginScreen.style.display = 'none';
+      appEl.style.display = 'flex';
+      usernameEl.textContent = username;
+      userAreaNameEl.textContent = username;
+      avatarEl.textContent = username.charAt(0).toUpperCase();
+      loadGuilds();
     }
 
-    async function handleLogin(code) {
+    async function tryRestoreSession() {
       try {
-        const res = await invoke('login', { code, redirect_uri: 'http://localhost:1420/callback' });
-        if (res.success) {
-          loginScreen.style.display = 'none';
-          app.style.display = 'flex';
-          loadGuilds();
-        } else {
-          alert('Ошибка входа: ' + (res.error || 'неизвестная'));
-        }
+        const me = await invoke('get_me');
+        showApp(me.username);
       } catch (e) {
-        alert('Ошибка: ' + e);
+        // не залогинен — остаёмся на экране входа
       }
     }
+
+    loginBtn.addEventListener('click', async () => {
+      loginBtn.disabled = true;
+      loginStatus.textContent = 'Открываю Discord в браузере…';
+      try {
+        const res = await invoke('start_login');
+        showApp(res.username);
+      } catch (e) {
+        loginStatus.textContent = String(e);
+        showError(String(e));
+      } finally {
+        loginBtn.disabled = false;
+      }
+    });
 
     async function loadGuilds() {
       try {
@@ -255,76 +278,77 @@
           const div = document.createElement('div');
           div.className = 'server-item';
           div.title = g.name;
-          div.onclick = () => loadChannels(g.id, g.name);
+          div.textContent = g.name.charAt(0).toUpperCase();
+          div.onclick = () => {
+            document.querySelectorAll('.server-item').forEach(el => el.classList.remove('active'));
+            div.classList.add('active');
+            loadChannels(g);
+          };
           serversEl.appendChild(div);
         });
       } catch (e) {
-        console.error(e);
+        showError('Не удалось загрузить серверы: ' + e);
       }
     }
 
-    async function loadChannels(guildId, guildName) {
-      currentGuildId = guildId;
+    async function loadChannels(guild) {
+      currentGuildId = guild.id;
+      channelsEl.innerHTML = '';
+      const name = document.createElement('div');
+      name.className = 'channel-category';
+      name.textContent = guild.name;
+      channelsEl.appendChild(name);
       try {
-        const channels = await invoke('get_channels', { guild_id: guildId });
-        channelListEl.innerHTML = `<div style="padding:8px 16px;font-weight:bold">${guildName}</div>`;
+        const channels = await invoke('get_channels', { guildId: guild.id });
         channels.forEach(c => {
           const div = document.createElement('div');
-          div.className = `channel-item ${c.kind === 2 ? 'voice' : ''}`;
-          div.textContent = (c.kind === 2 ? '🔊 ' : '# ') + c.name;
+          div.className = `channel-item ${c.kind === 2 ? 'voice' : 'text'}`;
+          div.textContent = c.name;
           div.onclick = () => {
-            if (c.kind === 2) {
-              joinVoice(c.id, guildId);
-            } else {
-              loadMessages(c.id);
-            }
+            document.querySelectorAll('.channel-item').forEach(el => el.classList.remove('active'));
+            div.classList.add('active');
+            if (c.kind === 2) joinVoice(c);
+            else openTextChannel(c);
           };
-          channelListEl.appendChild(div);
+          channelsEl.appendChild(div);
         });
       } catch (e) {
-        console.error(e);
+        showError('Не удалось загрузить каналы: ' + e);
       }
     }
 
-    async function joinVoice(channelId, guildId) {
-      voiceChannelName.textContent = 'Канал ' + channelId;
+    async function openTextChannel(channel) {
+      chatHeader.textContent = '# ' + channel.name;
+      messagesEl.innerHTML = '';
+      // TODO Этап 2: Gateway WebSocket и реальная история сообщений
+      const div = document.createElement('div');
+      div.style.color = '#8e9297';
+      div.textContent = 'История сообщений появится в Этапе 2 (Gateway WebSocket)';
+      messagesEl.appendChild(div);
+    }
+
+    async function joinVoice(channel) {
+      voiceChannelName.textContent = channel.name;
       voiceCall.classList.add('active');
       try {
-        await invoke('join_voice_channel', { channel_id: channelId, guild_id: guildId });
+        await invoke('join_voice_channel', { channelId: channel.id, guildId: currentGuildId });
       } catch (e) {
-        console.log('Voice join not ready yet:', e);
+        console.log('Голос ещё в разработке:', e);
       }
     }
 
-    document.getElementById('hangupBtn').onclick = () => {
-      voiceCall.classList.remove('active');
-    };
-
-    async function loadMessages(channelId) {
-      messagesEl.innerHTML = '<div style="color:#8e9297">История сообщений будет здесь</div>';
-    }
-
-    sendBtn.onclick = async () => {
-      const text = messageInput.value.trim();
-      if (!text) return;
-      addMessage(text, true);
-      messageInput.value = '';
-    };
-
-    function addMessage(text, me) {
-      const div = document.createElement('div');
-      div.className = `message ${me ? 'message-me' : ''}`;
-      div.textContent = text;
-      messagesEl.appendChild(div);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-    }
+    document.getElementById('hangupBtn').onclick = () => voiceCall.classList.remove('active');
 
     messageInput.addEventListener('keypress', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        sendBtn.click();
+        // TODO Этап 2: отправка сообщений
+        messageInput.value = '';
       }
     });
+
+    // Автовосстановление сессии при загрузке
+    tryRestoreSession();
   </script>
 </body>
 </html>
