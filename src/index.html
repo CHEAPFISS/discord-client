@@ -246,6 +246,7 @@
     <div class="user-area">
       <div class="avatar" id="avatar">?</div>
       <div id="userAreaName">…</div>
+      <button id="logoutBtn" style="margin-left:auto;background:transparent;border:1px solid #4f545c;color:#8e9297;border-radius:4px;padding:6px 10px;cursor:pointer;font-size:12px" title="Сбросить сессию">Выйти</button>
     </div>
     <div class="voice-call" id="voiceCall">
       <h3 id="voiceChannelName">Голосовой канал</h3>
@@ -460,6 +461,11 @@
         }
       });
     }
+
+    document.getElementById('logoutBtn').onclick = async () => {
+      try { await invoke('logout'); } catch (_) {}
+      location.reload();
+    };
 
     // Автовосстановление сессии при загрузке
     tryRestoreSession();

@@ -248,6 +248,11 @@ fn get_me(state: State<'_, DiscordState>) -> Result<serde_json::Value, String> {
     }))
 }
 
+#[command]
+fn logout(state: State<'_, DiscordState>) -> Result<(), String> {
+    state.set_session(None)
+}
+
 /// Вход по user-токену Discord (полноценный доступ к REST API).
 #[command]
 async fn login_with_token(
@@ -490,6 +495,7 @@ fn main() {
             start_login,
             login_with_token,
             get_me,
+            logout,
             get_guilds,
             get_channels,
             get_messages,
