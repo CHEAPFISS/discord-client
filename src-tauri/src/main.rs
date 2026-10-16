@@ -81,12 +81,21 @@ async fn gateway_once(
     let mut last_seq: Option<u64> = None;
     let heartbeat_ms = loop {
         let msg = read.next().await.ok_or("поток закрылся")?;
-        let msg = msg.map_err(|e| e.to_string())?;
-        if let Message::Text(text) = msg {
-            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-            if v["op"].as_u64() == Some(10) {
-                break v["d"]["heartbeat_interval"].as_u64().unwrap_or(45000);
+        let ping = match msg {
+            Ok(Message::Text(text)) => text,
+            Ok(Message::Ping(pay)) => {
+                write.send(Message::Pong(pay)).await.ok();
+                continue;
             }
+            Ok(other) => {
+                log::info!("Gateway до HELLO: {other:?}");
+                continue;
+            }
+            Err(e) => return Err(format!("ws при HELLO: {e}")),
+        };
+        let v: serde_json::Value = serde_json::from_str(&ping).map_err(|e| e.to_string())?;
+        if v["op"].as_u64() == Some(10) {
+            break v["d"]["heartbeat_interval"].as_u64().unwrap_or(45000);
         }
     };
 
@@ -106,6 +115,7 @@ async fn gateway_once(
 
     let _ = app.emit("gateway_status", json!({"status": "connected"}));
     log::info!("Gateway: подключен, heartbeat {heartbeat_ms}мс");
+    log::info!("Identify отправлен (tok={:.4}…)", &token[..4.min(token.len())]);
 
     // 3) heartbeat + приём событий
     let mut hb = tokio::time::interval(std::time::Duration::from_millis(heartbeat_ms));
@@ -133,14 +143,29 @@ async fn gateway_once(
                 let msg = msg.ok_or("поток закрылся")?;
                 let text = match msg.map_err(|e| e.to_string())? {
                     Message::Text(t) => t,
-                    Message::Ping(_) | Message::Pong(_) => continue,
-                    _ => continue,
+                    Message::Ping(pay) => {
+                        log::debug!("WebSocket Ping, отвечаю Pong");
+                        if write.send(Message::Pong(pay)).await.is_err() {
+                            return Err("pong send failed".into());
+                        }
+                        continue;
+                    }
+                    Message::Pong(_) => continue,
+                    Message::Close(c) => {
+                        return Err(format!("gateway закрыл соединение: {c:?}"));
+                    }
+                    other => {
+                        log::debug!("Gateway прочее: {other:?}");
+                        continue;
+                    }
                 };
                 let v: serde_json::Value = match serde_json::from_str(&text) {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
                 let op = v["op"].as_u64().unwrap_or(0);
+                let t = v["t"].as_str().unwrap_or("");
+                log::info!("Gateway recv: op={op} t={t}");
                 match op {
                     11 => { /* HEARTBEAT ACK */ }
                     7 | 9 => {
