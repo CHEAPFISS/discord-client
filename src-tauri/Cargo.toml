@@ -14,6 +14,7 @@ reqwest = { version = "0.11", features = ["json"] }
 url = "2"
 log = "0.4"
 env_logger = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 
 # Нативная WebRTC библиотека — подключим после выбора конкретной реализации
 #пример: webrtc = { version = "0.9", features = ["audio", "video"] }

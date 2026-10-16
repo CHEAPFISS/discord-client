@@ -54,7 +54,10 @@ async fn gateway_loop(
             }
             Err(e) => {
                 log::warn!("Gateway: ошибка {e}, переподключение через 5с");
-                let _ = app.emit("gateway_status", json!({"status": "reconnecting", "error": e}));
+                let _ = app.emit(
+                    "gateway_status",
+                    json!({"status": "reconnecting", "error": e}),
+                );
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -297,7 +300,10 @@ async fn send_message(
     Ok(ChatMessage {
         id: resp["id"].as_str().unwrap_or("").to_string(),
         channel_id,
-        author: resp["author"]["username"].as_str().unwrap_or("").to_string(),
+        author: resp["author"]["username"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
         content: resp["content"].as_str().unwrap_or("").to_string(),
         timestamp: resp["timestamp"].as_str().unwrap_or("").to_string(),
     })
@@ -458,9 +464,7 @@ async fn start_login(state: State<'_, DiscordState>) -> Result<serde_json::Value
     }))
 }
 
-async fn wait_for_code_on(
-    listener: tokio::net::TcpListener,
-) -> Result<(String, ()), String> {
+async fn wait_for_code_on(listener: tokio::net::TcpListener) -> Result<(String, ()), String> {
     loop {
         let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
         let mut buf = [0u8; 4096];
@@ -632,6 +636,12 @@ async fn leave_voice_channel(
 
 fn main() {
     env_logger::init();
+
+    // Явно фиксируем криптопровайдер rustls: иначе первое WS-подключение паникует,
+    // если в дереве зависимостей включены и ring, и aws-lc-rs (неоднозначность).
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
 
     tauri::Builder::default()
         .manage(DiscordState::load_or_default())
