@@ -97,7 +97,8 @@ pub struct Channel {
     pub id: String,
     pub guild_id: String,
     pub name: String,
-    #[serde(rename = "type")]
+    // type — имя в API Discord (только при разборе ответов); наружу отдаём kind
+    #[serde(rename(deserialize = "type"))]
     pub kind: u8,
 }
 

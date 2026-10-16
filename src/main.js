@@ -196,7 +196,7 @@ async function loadChannels(guild) {
     const channels = await invoke('get_channels', { guildId: guild.id });
     channels.forEach(c => {
       const div = document.createElement('div');
-      div.className = `channel-item ${c.kind === 2 ? 'voice' : 'text'}`;
+      div.className = `channel-item ${(c.kind === 2 || c.kind === 13) ? 'voice' : 'text'}`;
       div.dataset.channelId = c.id;
       const nameSpan = document.createElement('span');
       nameSpan.className = 'channel-name';
@@ -214,7 +214,7 @@ async function loadChannels(guild) {
         // сбрасываем непрочитанное для этого канала
         unread.delete(c.id);
         updateBadge(c.id);
-        if (c.kind === 2) joinVoice(c);
+        if (c.kind === 2 || c.kind === 13) joinVoice(c);
         else openTextChannel(c);
       };
       channelsEl.appendChild(div);
@@ -246,6 +246,11 @@ function clearMessages() {
   messagesEl.appendChild(empty);
 }
 
+function renderContent(rawHtml) {
+  // Упоминания <@id> → красивая метка @user (без API-разрешения имён)
+  return rawHtml.replace(/&lt;@(!?\d+)&gt;/g, '<span class="mention">@$1</span>');
+}
+
 function renderMessage(msg, { live = false } = {}) {
   // Убираем заглушку "пусто" при первом сообщении
   const existingEmpty = messagesEl.querySelector('.messages-empty');
@@ -261,7 +266,7 @@ function renderMessage(msg, { live = false } = {}) {
         <span class="author">${escapeHtml(msg.author)}</span>
         <span class="time">${fmtTime(msg.timestamp)}</span>
       </div>
-      <div class="text">${escapeHtml(msg.content)}</div>
+      <div class="text">${renderContent(escapeHtml(msg.content))}</div>
     </div>
   `;
   messagesEl.appendChild(div);

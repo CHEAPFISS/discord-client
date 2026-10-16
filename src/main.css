@@ -12,10 +12,10 @@ body {
 
 #app { display: flex; height: 100%; }
 
-/* --- Индикатор статуса шлюза (top-right) --- */
+/* --- Индикатор статуса шлюза (bottom-right, под голосовой панелью) --- */
 .app-status {
   position: fixed;
-  top: 12px;
+  bottom: 12px;
   right: 16px;
   display: flex;
   align-items: center;
@@ -52,7 +52,7 @@ body {
   border-bottom: 1px solid #202225;
   display: flex; align-items: center; gap: 10px;
 }
-.servers { padding: 20px 0; overflow-y: auto; }
+.servers { padding: 20px 0; overflow-y: auto; flex: 1; }
 .empty-servers { padding: 12px 20px; color: #8e9297; font-size: 13px; text-align: center; }
 
 .server-item {
@@ -142,10 +142,17 @@ body {
 .message .author { color: #00aff4; font-weight: bold; font-size: 14px; }
 .message .time { color: #72767d; font-size: 11px; margin-left: auto; white-space: nowrap; }
 .message .text { font-size: 15px; line-height: 1.4; white-space: pre-wrap; }
+.mention {
+  background: rgba(88,101,242,.3);
+  color: #dee0fc;
+  border-radius: 3px;
+  padding: 0 2px;
+}
 
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
+}
 
 /* --- Input --- */
 .input-area { padding: 0 16px 24px; }
@@ -170,6 +177,7 @@ textarea {
 
 /* --- User area --- */
 .user-area {
+  margin-top: auto;
   padding: 8px 16px;
   background: #292b2f;
   display: flex;
