@@ -126,6 +126,39 @@
     .login-btn:hover { background: #4752c4; }
     .login-btn:disabled { background: #4f545c; cursor: wait; }
     .login-status { margin-top: 16px; color: #8e9297; font-size: 13px; white-space: pre-wrap; max-width: 500px; }
+    .login-divider { margin: 20px 0 12px; color: #72767d; font-size: 13px; }
+    .token-row { display: flex; gap: 8px; }
+    .token-row input {
+      width: 340px;
+      padding: 12px 14px;
+      border-radius: 4px;
+      border: 1px solid #4f545c;
+      background: #202225;
+      color: #fff;
+      font-family: inherit;
+      font-size: 14px;
+    }
+    .login-btn.small { padding: 12px 20px; font-size: 14px; }
+    .token-help {
+      margin-top: 18px;
+      background: #2f3136;
+      border: 1px solid #202225;
+      border-radius: 8px;
+      padding: 12px 16px;
+      max-width: 500px;
+      text-align: left;
+      font-size: 13px;
+      color: #b9bbbe;
+    }
+    .token-help summary { cursor: pointer; color: #00aff4; }
+    .token-help ol { margin: 10px 0 6px 18px; }
+    .token-help code {
+      background: #202225;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .token-help .warn { color: #faa61a; margin-top: 8px; }
     .voice-call {
       position: fixed;
       bottom: 80px;
@@ -177,6 +210,21 @@
     <h1>Discord Client</h1>
     <p>Лёгкий клиент для звонков и чата</p>
     <button class="login-btn" id="loginBtn">Войти через Discord</button>
+    <div class="login-divider">или</div>
+    <div class="token-row">
+      <input type="password" id="tokenInput" placeholder="User-токен Discord (MTI5…)" autocomplete="off" />
+      <button class="login-btn small" id="tokenBtn">Войти</button>
+    </div>
+    <details class="token-help">
+      <summary>Как получить user-токен</summary>
+      <ol>
+        <li>Открой <b>discord.com</b> в браузере и войди в аккаунт</li>
+        <li>Нажми <b>F12</b> → вкладка <b>Console</b></li>
+        <li>Введи: <code>localStorage.getItem("token").replaceAll('"','')</code></li>
+        <li>Скопируй результат и вставь сюда</li>
+      </ol>
+      <p class="warn">⚠️ Токен — это доступ к твоему аккаунту. Никому его не передавай. Использование сторонних клиентов — против ToS Discord.</p>
+    </details>
     <div class="login-status" id="loginStatus"></div>
   </div>
 
@@ -272,6 +320,27 @@
         showError(String(e));
       } finally {
         loginBtn.disabled = false;
+      }
+    });
+
+    const tokenInput = document.getElementById('tokenInput');
+    const tokenBtn = document.getElementById('tokenBtn');
+
+    tokenBtn.addEventListener('click', async () => {
+      const token = tokenInput.value.trim();
+      if (!token) return showError('Вставь токен в поле');
+      tokenBtn.disabled = true;
+      loginStatus.textContent = 'Проверяю токен…';
+      try {
+        const res = await invoke('login_with_token', { token });
+        tokenInput.value = '';
+        showApp(res.username);
+        invoke('connect_gateway').catch(e => console.warn('gateway:', e));
+      } catch (e) {
+        loginStatus.textContent = String(e);
+        showError(String(e));
+      } finally {
+        tokenBtn.disabled = false;
       }
     });
 

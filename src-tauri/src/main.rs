@@ -179,6 +179,12 @@ async fn get_messages(
                 timestamp: m["timestamp"].as_str().unwrap_or("").to_string(),
             });
         }
+    } else {
+        return Err(format!(
+            "API вернул ошибку: {} (code {})",
+            resp["message"].as_str().unwrap_or("неизвестно"),
+            resp["code"].as_u64().unwrap_or(0)
+        ));
     }
     // API возвращает новые→старые; реверсим для отображения
     out.reverse();
@@ -239,6 +245,49 @@ fn get_me(state: State<'_, DiscordState>) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "user_id": s.user_id,
         "username": s.username
+    }))
+}
+
+/// Вход по user-токену Discord (полноценный доступ к REST API).
+#[command]
+async fn login_with_token(
+    state: State<'_, DiscordState>,
+    token: String,
+) -> Result<serde_json::Value, String> {
+    let token = token.trim().trim_matches('"').to_string();
+    if token.is_empty() {
+        return Err("Пустой токен".into());
+    }
+
+    let client = reqwest::Client::new();
+    let resp: serde_json::Value = client
+        .get(format!("{API_BASE}/users/@me"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("Ошибка запроса: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("Ошибка разбора: {e}"))?;
+
+    if resp["code"].is_number() || resp["id"].is_null() {
+        return Err(format!(
+            "Токен не принят Discord: {} (code {})",
+            resp["message"].as_str().unwrap_or("неизвестно"),
+            resp["code"].as_u64().unwrap_or(0)
+        ));
+    }
+
+    let session = discord_client::DiscordSession {
+        token,
+        user_id: resp["id"].as_str().unwrap_or("").to_string(),
+        username: resp["username"].as_str().unwrap_or("").to_string(),
+    };
+    state.set_session(Some(session.clone()))?;
+
+    Ok(serde_json::json!({
+        "user_id": session.user_id,
+        "username": session.username
     }))
 }
 
@@ -371,6 +420,12 @@ async fn get_guilds(state: State<'_, DiscordState>) -> Result<Vec<Guild>, String
                 icon: g["icon"].as_str().map(String::from),
             });
         }
+    } else {
+        return Err(format!(
+            "API вернул ошибку: {} (code {})",
+            resp["message"].as_str().unwrap_or("неизвестно"),
+            resp["code"].as_u64().unwrap_or(0)
+        ));
     }
     Ok(guilds)
 }
@@ -402,6 +457,12 @@ async fn get_channels(
                 kind: c["type"].as_u64().unwrap_or(0) as u8,
             });
         }
+    } else {
+        return Err(format!(
+            "API вернул ошибку: {} (code {})",
+            resp["message"].as_str().unwrap_or("неизвестно"),
+            resp["code"].as_u64().unwrap_or(0)
+        ));
     }
     Ok(channels)
 }
@@ -427,6 +488,7 @@ fn main() {
         .manage(DiscordState::load_or_default())
         .invoke_handler(generate_handler![
             start_login,
+            login_with_token,
             get_me,
             get_guilds,
             get_channels,
