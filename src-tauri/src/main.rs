@@ -160,7 +160,7 @@ async fn get_messages(
     let resp: serde_json::Value = client
         .get(format!("{API_BASE}/channels/{channel_id}/messages"))
         .query(&[("limit", "50")])
-        .bearer_auth(token)
+        .header("Authorization", token)
         .send()
         .await
         .map_err(|e| format!("Ошибка запроса истории: {e}"))?
@@ -201,7 +201,7 @@ async fn send_message(
     let client = reqwest::Client::new();
     let resp: serde_json::Value = client
         .post(format!("{API_BASE}/channels/{channel_id}/messages"))
-        .bearer_auth(token)
+        .header("Authorization", token)
         .json(&json!({"content": content}))
         .send()
         .await
@@ -267,7 +267,7 @@ async fn login_with_token(
     let client = reqwest::Client::new();
     let resp: serde_json::Value = client
         .get(format!("{API_BASE}/users/@me"))
-        .bearer_auth(&token)
+        .header("Authorization", &token)
         .send()
         .await
         .map_err(|e| format!("Ошибка запроса: {e}"))?
@@ -408,7 +408,7 @@ async fn get_guilds(state: State<'_, DiscordState>) -> Result<Vec<Guild>, String
     let client = reqwest::Client::new();
     let resp: serde_json::Value = client
         .get(format!("{API_BASE}/users/@me/guilds"))
-        .bearer_auth(token)
+        .header("Authorization", token)
         .send()
         .await
         .map_err(|e| format!("Ошибка запроса серверов: {e}"))?
@@ -444,7 +444,7 @@ async fn get_channels(
     let client = reqwest::Client::new();
     let resp: serde_json::Value = client
         .get(format!("{API_BASE}/guilds/{guild_id}/channels"))
-        .bearer_auth(token)
+        .header("Authorization", token)
         .send()
         .await
         .map_err(|e| format!("Ошибка запроса каналов: {e}"))?
