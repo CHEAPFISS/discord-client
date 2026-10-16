@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Discord Client</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: #36393f;
+      color: #dcddde;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #app {
+      display: flex;
+      height: 100%;
+    }
+    .sidebar {
+      width: 260px;
+      background: #2f3136;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid #202225;
+    }
+    .servers {
+      padding: 20px 0;
+      overflow-y: auto;
+    }
+    .server-item {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      margin: 0 auto 16px;
+      cursor: pointer;
+      background: #4f545c;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .server-item.active { background: #7289da; }
+    .channels {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+    }
+    .channel-list {
+      margin-bottom: 24px;
+    }
+    .channel-item {
+      padding: 8px 16px;
+      cursor: pointer;
+      border-radius: 4px;
+      margin: 2px 0;
+      font-size: 15px;
+    }
+    .channel-item:hover { background: #4f545c; }
+    .channel-item.voice { color: #8e9297; }
+    .chat {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: #36393f;
+    }
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .message {
+      max-width: 60%;
+      padding: 12px 16px;
+      border-radius: 8px;
+      background: #40444b;
+      font-size: 15px;
+      line-height: 1.4;
+    }
+    .message-me { align-self: flex-end; background: #7289da; color: white; }
+    .input-area {
+      padding: 16px;
+      border-top: 1px solid #40444b;
+      background: #40444b;
+    }
+    .input-wrapper {
+      display: flex;
+      gap: 8px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    textarea {
+      flex: 1;
+      padding: 12px 16px;
+      border-radius: 8px;
+      border: none;
+      background: #4f545c;
+      color: white;
+      font-family: inherit;
+      font-size: 15px;
+      resize: none;
+    }
+    button.send {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      background: #7289da;
+      border: none;
+      cursor: pointer;
+      color: white;
+      font-size: 18px;
+    }
+    .login-screen {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      text-align: center;
+    }
+    .login-screen h1 { margin-bottom: 24px; font-size: 32px; }
+    .login-btn {
+      padding: 12px 32px;
+      font-size: 16px;
+      border-radius: 4px;
+      border: none;
+      background: #5865f2;
+      color: white;
+      cursor: pointer;
+    }
+    .login-btn:hover { background: #4752c4; }
+    .voice-call {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 280px;
+      background: #2f3136;
+      border: 1px solid #40444b;
+      border-radius: 12px;
+      padding: 16px;
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .voice-call.active { display: flex; }
+    .voice-call h3 { margin-bottom: 8px; font-size: 16px; }
+    .voice-controls {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+    }
+    .voice-btn {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .voice-btn.mic-off { background: #ed4245; color: white; }
+    .voice-btn.deaf { background: #faa61a; color: white; }
+    .voice-btn.hangup { background: #ed4245; color: white; }
+  </style>
+</head>
+<body>
+  <div id="login" class="login-screen">
+    <h1>Discord Client</h1>
+    <p>Лёгкий клиент для звонков и чата</p>
+    <button class="login-btn" id="loginBtn">Войти через Discord</button>
+  </div>
+
+  <div id="app" style="display: none;">
+    <div class="sidebar">
+      <div class="servers" id="servers"></div>
+    </div>
+    <div class="channels" id="channels">
+      <div class="channel-list" id="channelList"></div>
+    </div>
+    <div class="chat">
+      <div class="messages" id="messages"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <textarea id="messageInput" rows="1" placeholder="Сообщение..."></textarea>
+          <button class="send" id="sendBtn">▶</button>
+        </div>
+      </div>
+    </div>
+    <div class="voice-call" id="voiceCall">
+      <h3 id="voiceChannelName">Голосовой канал</h3>
+      <div class="voice-controls">
+        <button class="voice-btn mic-off" id="micBtn">🎙</button>
+        <button class="voice-btn deaf" id="deafBtn">🔇</button>
+        <button class="voice-btn hangup" id="hangupBtn">📞</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { invoke } from '@tauri-apps/api/tauri';
+
+    const loginScreen = document.getElementById('login');
+    const app = document.getElementById('app');
+    const loginBtn = document.getElementById('loginBtn');
+    const serversEl = document.getElementById('servers');
+    const channelListEl = document.getElementById('channelList');
+    const messagesEl = document.getElementById('messages');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const voiceCall = document.getElementById('voiceCall');
+    const voiceChannelName = document.getElementById('voiceChannelName');
+
+    let currentGuildId = null;
+
+    loginBtn.addEventListener('click', async () => {
+      // Открываем OAuth URL Discord
+      const clientId = 'YOUR_CLIENT_ID';
+      const redirectUri = 'http://localhost:1420/callback';
+      const scope = 'identify guilds';
+      const url = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}`;
+      window.location.href = url;
+    });
+
+    // Проверка callbacks URL (упрощённо)
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    if (code) {
+      await handleLogin(code);
+    }
+
+    async function handleLogin(code) {
+      try {
+        const res = await invoke('login', { code, redirect_uri: 'http://localhost:1420/callback' });
+        if (res.success) {
+          loginScreen.style.display = 'none';
+          app.style.display = 'flex';
+          loadGuilds();
+        } else {
+          alert('Ошибка входа: ' + (res.error || 'неизвестная'));
+        }
+      } catch (e) {
+        alert('Ошибка: ' + e);
+      }
+    }
+
+    async function loadGuilds() {
+      try {
+        const guilds = await invoke('get_guilds');
+        serversEl.innerHTML = '';
+        guilds.forEach(g => {
+          const div = document.createElement('div');
+          div.className = 'server-item';
+          div.title = g.name;
+          div.onclick = () => loadChannels(g.id, g.name);
+          serversEl.appendChild(div);
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function loadChannels(guildId, guildName) {
+      currentGuildId = guildId;
+      try {
+        const channels = await invoke('get_channels', { guild_id: guildId });
+        channelListEl.innerHTML = `<div style="padding:8px 16px;font-weight:bold">${guildName}</div>`;
+        channels.forEach(c => {
+          const div = document.createElement('div');
+          div.className = `channel-item ${c.kind === 2 ? 'voice' : ''}`;
+          div.textContent = (c.kind === 2 ? '🔊 ' : '# ') + c.name;
+          div.onclick = () => {
+            if (c.kind === 2) {
+              joinVoice(c.id, guildId);
+            } else {
+              loadMessages(c.id);
+            }
+          };
+          channelListEl.appendChild(div);
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function joinVoice(channelId, guildId) {
+      voiceChannelName.textContent = 'Канал ' + channelId;
+      voiceCall.classList.add('active');
+      try {
+        await invoke('join_voice_channel', { channel_id: channelId, guild_id: guildId });
+      } catch (e) {
+        console.log('Voice join not ready yet:', e);
+      }
+    }
+
+    document.getElementById('hangupBtn').onclick = () => {
+      voiceCall.classList.remove('active');
+    };
+
+    async function loadMessages(channelId) {
+      messagesEl.innerHTML = '<div style="color:#8e9297">История сообщений будет здесь</div>';
+    }
+
+    sendBtn.onclick = async () => {
+      const text = messageInput.value.trim();
+      if (!text) return;
+      addMessage(text, true);
+      messageInput.value = '';
+    };
+
+    function addMessage(text, me) {
+      const div = document.createElement('div');
+      div.className = `message ${me ? 'message-me' : ''}`;
+      div.textContent = text;
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    messageInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendBtn.click();
+      }
+    });
+  </script>
+</body>
+</html>
