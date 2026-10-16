@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Разрешения окна main: события ядра (listen/emit)",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}
