@@ -295,8 +295,8 @@ async function openTextChannel(channel) {
 }
 
 function appendLiveMessage(msg) {
-  // Считаем непрочитанное, если сообщение не из текущего канала
-  if (currentChannelId && msg.channel_id !== currentChannelId) {
+  // Считаем непрочитанное, если канал не открыт или сообщение из другого канала
+  if (!currentChannelId || msg.channel_id !== currentChannelId) {
     unread.set(msg.channel_id, (unread.get(msg.channel_id) || 0) + 1);
     updateBadge(msg.channel_id);
     return;

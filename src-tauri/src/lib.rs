@@ -21,15 +21,6 @@ impl GatewaySender {
     }
 }
 
-/// Метаданные активного голосового UDP-соединения (сам сокет живёт в spawned задаче).
-#[derive(Debug, Clone, Default)]
-pub struct VoiceConnectionMeta {
-    pub secret_key: Option<Vec<u8>>,
-    pub ssrc: Option<u32>,
-    pub mode: Option<String>,
-    pub connected: bool,
-}
-
 /// Активное голосовое соединение (oto) — держим хендл живым, иначе соединение закроется.
 pub type ActiveVoiceConnection = oto::VoiceConnection;
 

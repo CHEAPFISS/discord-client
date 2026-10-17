@@ -99,12 +99,44 @@ async fn restart_gateway_for_new_token(
     });
 }
 
+/// После переподключения gateway (это НОВАЯ gateway-сессия) Discord мог молча
+/// похоронить голос от старой сессии — переотправляем op 4, чтобы он выдал свежую пару.
+fn rekick_voice_if_joined(app: &AppHandle) {
+    let st = app.state::<DiscordState>();
+    let target = st
+        .voice
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|v| (v.guild_id.clone(), v.channel_id.clone()));
+    drop(st);
+    let Some((guild_id, channel_id)) = target else { return };
+    log::info!("Gateway: новая сессия — переотправка op 4 (канал {channel_id})");
+    let app2 = app.clone();
+    tokio::spawn(async move {
+        let sender = app2.state::<GatewaySender>();
+        let op4 = json!({
+            "op": 4,
+            "d": {
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "self_mute": false,
+                "self_deaf": false
+            }
+        });
+        if let Err(e) = sender.send(op4).await {
+            log::warn!("Gateway rekick op4: {e}");
+        }
+    });
+}
+
 /// Бесконечный цикл соединения с ретраями.
 async fn gateway_loop(
     app: AppHandle,
     token: String,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
 ) -> Result<(), String> {
+    let mut first_pass = true;
     loop {
         match gateway_once(&app, &token, &mut rx).await {
             Ok(true) => {
@@ -113,6 +145,10 @@ async fn gateway_loop(
             }
             Ok(_) => {
                 log::info!("Gateway: закрыто штатно, переподключение через 3с");
+                if !first_pass {
+                    rekick_voice_if_joined(&app);
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             }
             Err(e) => {
                 log::warn!("Gateway: ошибка {e}, переподключение через 5с");
@@ -120,9 +156,13 @@ async fn gateway_loop(
                     "gateway_status",
                     json!({"status": "reconnecting", "error": e}),
                 );
+                if !first_pass {
+                    rekick_voice_if_joined(&app);
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        first_pass = false;
     }
 }
 
@@ -182,10 +222,17 @@ async fn gateway_once(
     // 3) heartbeat + приём событий
     let mut hb = tokio::time::interval(std::time::Duration::from_millis(heartbeat_ms));
     hb.tick().await; // первый tick срабатывает сразу
+    // Контроль живости: нет HEARTBEAT ACK к следующему тику — рвём и реконнектим.
+    let mut awaiting_ack = false;
 
     loop {
         tokio::select! {
             _ = hb.tick() => {
+                if awaiting_ack {
+                    log::warn!("Gateway: HEARTBEAT ACK не получен — переподключаюсь");
+                    return Err("heartbeat ack timeout".into());
+                }
+                awaiting_ack = true;
                 let hb = json!({"op": 1, "d": last_seq});
                 if write.send(Message::Text(hb.to_string())).await.is_err() {
                     return Err("heartbeat send failed".into());
@@ -233,7 +280,7 @@ async fn gateway_once(
                 let t = v["t"].as_str().unwrap_or("");
                 log::info!("Gateway recv: op={op} t={t}");
                 match op {
-                    11 => { /* HEARTBEAT ACK */ }
+                    11 => { awaiting_ack = false; /* HEARTBEAT ACK */ }
                     7 | 9 => {
                         return Err(format!("gateway требует реконнект (op {op})"));
                     }
@@ -511,11 +558,13 @@ struct TokenResponse {
 async fn start_login(state: State<'_, DiscordState>) -> Result<serde_json::Value, String> {
     let cfg = read_oauth_config()?;
 
-    // 1. Открываем браузер для авторизации
+    // 1. Открываем браузер для авторизации (state — защита callback от подмены)
+    let state_token = random_oauth_state();
     let auth_url = format!(
-        "https://discord.com/oauth2/authorize?client_id={}&response_type=code&redirect_uri={}&scope=identify%20guilds",
+        "https://discord.com/oauth2/authorize?client_id={}&response_type=code&redirect_uri={}&scope=identify%20guilds&state={}",
         cfg.client_id,
-        REDIRECT_URI.replace(':', "%3A").replace('/', "%2F")
+        REDIRECT_URI.replace(':', "%3A").replace('/', "%2F"),
+        state_token
     );
 
     let listener: tokio::net::TcpListener = tokio::net::TcpListener::bind("127.0.0.1:1436")
@@ -527,7 +576,7 @@ async fn start_login(state: State<'_, DiscordState>) -> Result<serde_json::Value
         .spawn()
         .map_err(|e| format!("Не удалось открыть браузер: {e}"))?;
 
-    let (code, _stream) = wait_for_code_on(listener).await?;
+    let code = wait_for_code_on(listener, &state_token).await?;
 
     // 2. Обмен кода на токен
     let client = reqwest::Client::new();
@@ -580,7 +629,34 @@ async fn start_login(state: State<'_, DiscordState>) -> Result<serde_json::Value
     }))
 }
 
-async fn wait_for_code_on(listener: tokio::net::TcpListener) -> Result<(String, ()), String> {
+/// Случайный nonce для OAuth state (16 байт энтропии).
+fn random_oauth_state() -> String {
+    use std::io::Read;
+    let mut buf = [0u8; 16];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut buf))
+        .is_err()
+    {
+        let mut acc = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+            ^ (std::process::id() as u64);
+        for b in buf.iter_mut() {
+            acc = acc
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            *b = (acc >> 33) as u8;
+        }
+    }
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Ждём callback с code= и state=; чужой/без state — запрос игнорируется (жмём дальше).
+async fn wait_for_code_on(
+    listener: tokio::net::TcpListener,
+    expected_state: &str,
+) -> Result<String, String> {
     loop {
         let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
         let mut buf = [0u8; 4096];
@@ -588,18 +664,38 @@ async fn wait_for_code_on(listener: tokio::net::TcpListener) -> Result<(String, 
         let req = String::from_utf8_lossy(&buf[..n]);
         let first_line = req.lines().next().unwrap_or("");
 
+        // Разбор query: GET /callback?code=...&state=...
+        let query = first_line
+            .split(' ')
+            .nth(1)
+            .unwrap_or_default()
+            .split('?')
+            .nth(1)
+            .unwrap_or_default();
+        let qparam = |name: &str| -> Option<String> {
+            query.split('&').find_map(|kv| {
+                let mut it = kv.splitn(2, '=');
+                (it.next()? == name).then(|| it.next().unwrap_or_default().to_string())
+            })
+        };
+        let got_code = qparam("code");
+        let got_state = qparam("state");
+
         use tokio::io::AsyncWriteExt;
-        let response_body = if first_line.contains("code=") {
+        let response_body = if got_code.is_some() {
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body style='font-family:sans-serif;background:#36393f;color:#fff;text-align:center;padding-top:80px'><h2>Вход выполнен!</h2><p>Вернитесь в приложение.</p></body></html>"
         } else {
             "HTTP/1.1 404 Not Found\r\n\r\n<!doctype html><html><body>listening for callback...</body></html>\r\n"
         };
         let _ = stream.write_all(response_body.as_bytes()).await;
 
-        if let Some(pos) = first_line.find("code=") {
-            let rest = &first_line[pos + 5..];
-            let end = rest.find(['&', ' ']).unwrap_or(rest.len());
-            return Ok((rest[..end].to_string(), ()));
+        match (got_code, got_state) {
+            (Some(code), Some(state)) if state == expected_state => return Ok(code),
+            (Some(_), _) => {
+                log::warn!("OAuth: callback без state/с неверным state — игнорирую");
+                continue;
+            }
+            _ => continue,
         }
     }
 }
@@ -816,21 +912,6 @@ fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
         voice_connect_lock: state.voice_connect_lock.clone(),
         voice_rejoin: state.voice_rejoin.clone(),
     }
-}
-
-/// Команда для совместимости (старый фронт) — реальная работа в connect_voice.
-#[command]
-async fn voice_udp_connect(
-    app: AppHandle,
-    state: State<'_, DiscordState>,
-    session_id: String,
-    token: String,
-    endpoint: String,
-    guild_id: String,
-    channel_id: String,
-) -> Result<(), String> {
-    let st = clone_state(&state);
-    connect_voice(app, st, guild_id, channel_id, session_id, token, endpoint).await
 }
 
 /// Голосовое подключение Discord через oto: Voice Gateway v8 + DAVE (E2EE) + RTP.
@@ -1104,7 +1185,12 @@ async fn connect_voice(
 // --- Точка входа ---
 
 fn main() {
-    env_logger::init();
+    // Дефолт-фильтр: info + глушим крипто/WS-крейсы. RUST_LOG=debug/trace перекрывает.
+    // RUST_LOG=trace раскрывает заголовки (Authorization) и Identify-фрейм — не для реальных сессий.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(
+        "info,hyper=warn,tungstenite=warn,rustls=warn",
+    ))
+    .init();
 
     // Явно фиксируем криптопровайдер rustls: иначе первое WS-подключение паникует,
     // если в дереве зависимостей включены и ring, и aws-lc-rs (неоднозначность).
@@ -1126,8 +1212,7 @@ fn main() {
             send_message,
             connect_gateway,
             join_voice_channel,
-            leave_voice_channel,
-            voice_udp_connect
+            leave_voice_channel
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
