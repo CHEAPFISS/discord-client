@@ -1365,7 +1365,7 @@ async fn connect_voice(
                     let _ = pump_app.emit("voice_status", json!({"status": "left"}));
                     break;
                 }
-                oto::ConnectionEvent::AudioReceived { user_id, ssrc, opus, missing } => {
+                oto::ConnectionEvent::AudioReceived { opus, missing, .. } => {
                     // Кадр уже расшифрован oto (автор определён по ratchet'у
                     // отправителя). По-кадровых логов нет — до 100 кадров/с.
                     let _ = audio_tx.send((opus, missing as u8)).await;
