@@ -1366,8 +1366,8 @@ async fn connect_voice(
                     break;
                 }
                 oto::ConnectionEvent::AudioReceived { user_id, ssrc, opus, missing } => {
-                    // Кадр уже расшифрован oto (автор определён по ratchet'у отправителя).
-                    log::debug!("Voice (oto) audio from user {user_id} ssrc {ssrc} {} bytes missing {missing}", opus.len());
+                    // Кадр уже расшифрован oto (автор определён по ratchet'у
+                    // отправителя). По-кадровых логов нет — до 100 кадров/с.
                     let _ = audio_tx.send((opus, missing as u8)).await;
                 }
                 oto::ConnectionEvent::DaveStateChanged { opcode, before, after, .. } => {
