@@ -923,6 +923,7 @@ async fn attach_mic_task(app: AppHandle, conn: oto::VoiceConnection) {
 /// Позволяет увидеть, где пасер оказался после «внезапного» обрыва.
 async fn mic_stats_task(app: AppHandle) {
     let mut last_phase: Option<String> = None;
+    let mut last_frames_key: (String, u64, u64) = (String::new(), 0, 0);
     // Терминальный Failed (обычно контракт poll: >2 мс CPU у кадра). Каждую
     // секунду пробуем replace_source новым MicSource: oto продолжит ту же
     // сессию — это заменяет ручной перезаход, который делал пользователь.
@@ -937,6 +938,10 @@ async fn mic_stats_task(app: AppHandle) {
         let Some(sender) = sender else {
             continue;
         };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         let snap = sender.state();
         let stats = snap.stats();
         let phase = format!("{:?}", snap.phase());
@@ -995,6 +1000,18 @@ async fn mic_stats_task(app: AppHandle) {
                 stats.frames_unavailable(),
             );
             last_phase = Some(phase.clone());
+        }
+        // Скорость потребления: кадров/с (норма ~50 при 20 мс тике). Если
+        // стабильно меньше — пасер подсвечивает недобор и голос копится в кольце.
+        if phase == last_frames_key.0 {
+            let dt = (now_ms - last_frames_key.1) as f64;
+            if dt >= 15_000.0 {
+                let rate = (stats.frames_sent() as f64 - last_frames_key.2 as f64) * 1000.0 / dt;
+                log::debug!("Микрофон/пасер скорость потребления: {rate:.1} кадров/с");
+                last_frames_key = (phase.clone(), now_ms, stats.frames_sent());
+            }
+        } else {
+            last_frames_key = (phase.clone(), now_ms, stats.frames_sent());
         }
         if !matches!(snap.phase(), oto::AudioPhase::Sending) {
             log::warn!(
@@ -1488,6 +1505,8 @@ struct MicSource {
     stereo: Vec<f32>,
     /// Моно-буфер кадра (переиспользуется — минус аллокация на каждый poll).
     mono: Vec<f32>,
+    /// Счётчик poll'ов (для периодической диагностики глубины кольца).
+    poll_i: u64,
     /// Одноразовый лог первого кадра (диагностика старта цепочки отправки).
     logged_first: bool,
 }
@@ -1567,6 +1586,7 @@ impl MicSource {
             encoder,
             stereo: Vec::with_capacity(MIC_FRAME_SAMPLES * 2),
             mono: Vec::with_capacity(MIC_FRAME_SAMPLES),
+            poll_i: 0,
             logged_first: false,
         })
     }
@@ -1583,6 +1603,17 @@ impl FrameSource for MicSource {
         self.mono.clear();
         self.mono.extend(ring.drain(..MIC_FRAME_SAMPLES));
         drop(ring);
+
+        // Диагностика задержки: глубина кольца после потребления кадра.
+        // Каждые ~2 сек: если растёт —(clock-drift/поздние тики), если ~константа — ок.
+        self.poll_i += 1;
+        if self.poll_i % 100 == 0 {
+            let left = self.ring.lock().unwrap().len();
+            log::debug!(
+                "Микрофон: poll№{} кадр забран, осталось в кольце {left} сэмплов",
+                self.poll_i
+            );
+        }
 
         self.stereo.clear();
         for s in &self.mono {
