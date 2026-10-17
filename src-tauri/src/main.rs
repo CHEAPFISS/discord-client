@@ -5,6 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
 use tauri::{command, generate_context, generate_handler, AppHandle, Emitter, Manager, State};
+use tokio_tungstenite::tungstenite::Message;
 use tokio::io::AsyncReadExt;
 use tokio::net::UdpSocket;
 
@@ -676,8 +677,8 @@ pub struct VoiceUdpConnectRequest {
     pub channel_id: String,
 }
 
-/// Голосовое UDP-подключение к серверу Discord:
-/// IP Discovery → Select Protocol → Voice Heartbeat → (Opus RTP — следующий этап).
+/// Голосовое подключение к серверу Discord:
+/// Voice WebSocket (identify → READY с ssrc) → UDP (IP Discovery → Select Protocol → Heartbeat).
 #[command]
 async fn voice_udp_connect(
     app: AppHandle,
@@ -689,7 +690,7 @@ async fn voice_udp_connect(
     channel_id: String,
 ) -> Result<(), String> {
     log::info!(
-        "Voice UDP connect: guild={} channel={} endpoint={}",
+        "Voice connect: guild={} channel={} endpoint={}",
         guild_id, channel_id, endpoint
     );
 
@@ -711,7 +712,7 @@ async fn voice_udp_connect(
 
     tokio::spawn(async move {
         if let Err(e) = run_voice_udp(app_clone, state_clone, req).await {
-            log::error!("Voice UDP error: {e}");
+            log::error!("Voice error: {e}");
             let _ = app_err.emit("voice_status", json!({"status": "error", "error": e}));
         }
     });
@@ -724,31 +725,73 @@ async fn run_voice_udp(
     state: DiscordState,
     req: VoiceUdpConnectRequest,
 ) -> Result<(), String> {
-    // Разбираем endpoint (формат: host:port)
-    let endpoint_addr: std::net::SocketAddr = req
-        .endpoint
-        .parse()
-        .map_err(|e| format!("Неверный endpoint {}: {e}", req.endpoint))?;
+    let user_id = {
+        let guard = state.session.lock().unwrap();
+        guard.as_ref().ok_or("Не залогинен")?.user_id.clone()
+    };
 
-    // 1) Создаём UDP сокет и подключаемся к голосовому серверу Discord
+    // 1) Голосовой WebSocket: wss://{endpoint}/?v=4
+    let voice_ws_url = format!("wss://{}/?v=4", req.endpoint);
+    log::debug!("Voice WebSocket URL: {voice_ws_url}");
+    let (ws_stream, _) = tokio_tungstenite::connect_async(voice_ws_url.as_str())
+        .await
+        .map_err(|e| format!("Voice WebSocket connect: {e}"))?;
+    let (mut vw_write, mut vw_read) = ws_stream.split();
+
+    // 2) Identify на голосовом WS
+    let identify = json!({
+        "op": 4,
+        "d": {
+            "server_id": req.guild_id,
+            "user_id": user_id,
+            "session_id": req.session_id,
+            "token": req.token
+        }
+    });
+    vw_write
+        .send(tokio_tungstenite::tungstenite::Message::Text(identify.to_string()))
+        .await
+        .map_err(|e| format!("Voice identify send: {e}"))?;
+    log::debug!("Voice identify отправлен");
+
+    // 3) Ждём ready (op 0) с ssrc
+    let mut ssrc: Option<u32> = None;
+    while ssrc.is_none() {
+        let msg = vw_read.next().await.ok_or("Voice WS поток закрылся")?;
+        let msg = msg.map_err(|e| e.to_string())?;
+        if let Message::Text(text) = msg {
+            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            let op = v["op"].as_u64().unwrap_or(0);
+            let t = v["t"].as_str().unwrap_or("");
+            log::debug!("Voice WS recv: op={op} t={t}");
+            if op == 0 && t == "READY" {
+                let d = &v["d"];
+                ssrc = d["ssrc"].as_u64().map(|s| s as u32);
+                log::info!("Voice READY: ssrc={:?}", ssrc);
+            }
+        }
+    }
+    let ssrc = ssrc.ok_or("Не получил ssrc от голосового сервера")?;
+
+    // 4) UDP сокет к голосовому серверу (accept hostname:port)
     let socket = UdpSocket::bind("0.0.0.0:0")
         .await
         .map_err(|e| format!("Не удалось bind UDP: {e}"))?;
     socket
-        .connect(endpoint_addr)
+        .connect(req.endpoint.as_str())
         .await
         .map_err(|e| format!("Не удалось connect UDP: {e}"))?;
     let local = socket.local_addr().map_err(|e| e.to_string())?;
-    log::info!("Voice UDP bound to {local}, connected to {endpoint_addr}");
+    log::info!("Voice UDP bound to {local}, connected to {}", req.endpoint);
 
-    // Сохраняем локальный порт в состояние (для отладки)
     {
         let mut conn = state.voice_conn.lock().unwrap();
         conn.connected = true;
+        conn.ssrc = Some(ssrc);
         conn.mode = Some("xsalsa20_poly1305".into());
     }
 
-    // 2) IP Discovery (payload 0x01): 0x01 + 70 байт нулей
+    // 5) IP Discovery (payload 0x01): 0x01 + 70 байт нулей
     let mut discovery = vec![0x01u8];
     discovery.resize(71, 0);
     socket.send(&discovery).await.map_err(|e| e.to_string())?;
