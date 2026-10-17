@@ -610,6 +610,7 @@ async fn join_voice_channel(
     };
 
     // фиксируем цель голосового подключения
+    state.voice_rejoin.store(0, std::sync::atomic::Ordering::SeqCst);
     {
         let mut voice = state.voice.lock().unwrap();
         *voice = Some(discord_client::VoiceData {
@@ -654,6 +655,7 @@ async fn leave_voice_channel(
     // закрываем oto-соединение, если активно
     let active_conn = state.voice_conn.lock().unwrap().conn.take();
     state.voice_conn.lock().unwrap().session_id = None;
+    state.voice_rejoin.store(0, std::sync::atomic::Ordering::SeqCst);
     if let Some(conn) = active_conn {
         let _ = conn.shutdown().await;
     }
@@ -675,6 +677,47 @@ async fn leave_voice_channel(
 
 /// Голосовое подключение к серверу Discord:
 /// Voice WebSocket (identify → READY с ssrc) → UDP (IP Discovery → Select Protocol → Heartbeat).
+/// Повторный op 4 join текущего канала: Discord выдаст свежую пару (session, token).
+/// Нужно после 4014/4022 NeedsFreshVoiceInfo — токен одноразовый и мог быть потрачен.
+const VOICE_REJOIN_LIMIT: u64 = 3;
+
+fn request_voice_rejoin(app: &AppHandle, state: &DiscordState) {
+    use std::sync::atomic::Ordering;
+    let attempts = state.voice_rejoin.fetch_add(1, Ordering::SeqCst) + 1;
+    if attempts > VOICE_REJOIN_LIMIT {
+        log::warn!("Voice: re-join не запрошен — исчерпан лимит ({VOICE_REJOIN_LIMIT})");
+        let _ = app.emit(
+            "voice_status",
+            json!({"status": "error", "error": "не получил свежую voice-пару после 3 попыток"}),
+        );
+        return;
+    }
+    let target = state
+        .voice
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|v| (v.guild_id.clone(), v.channel_id.clone()));
+    let Some((guild_id, channel_id)) = target else { return };
+    log::info!("Voice: запрашиваю свежую voice-пару (re-join #{attempts})");
+    let app = app.clone();
+    tokio::spawn(async move {
+        let sender = app.state::<GatewaySender>();
+        let op4 = json!({
+            "op": 4,
+            "d": {
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "self_mute": false,
+                "self_deaf": false
+            }
+        });
+        if let Err(e) = sender.send(op4).await {
+            log::warn!("Voice re-join send: {e}");
+        }
+    });
+}
+
 /// Клоны Arc-полей состояния для spawned задач.
 fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
     DiscordState {
@@ -682,6 +725,7 @@ fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
         voice: state.voice.clone(),
         voice_conn: state.voice_conn.clone(),
         voice_connect_lock: state.voice_connect_lock.clone(),
+        voice_rejoin: state.voice_rejoin.clone(),
     }
 }
 
@@ -761,11 +805,18 @@ async fn connect_voice(
         let _ = prev.shutdown().await;
     }
 
-    let conn = oto.connect(info).await.map_err(|e| {
-        // сброс пометки, чтобы следующие события голоса могли попытаться снова
-        state.voice_conn.lock().unwrap().session_id = None;
-        format!("oto connect: {e}")
-    })?;
+    let conn = match oto.connect(info).await {
+        Ok(c) => c,
+        Err(e) => {
+            // сброс пометки, чтобы следующие события голоса могли попытаться снова
+            state.voice_conn.lock().unwrap().session_id = None;
+            if matches!(e.retry_disposition(), oto::RetryDisposition::NeedsFreshVoiceInfo) {
+                request_voice_rejoin(&app, &state);
+            }
+            return Err(format!("oto connect: {e}"));
+        }
+    };
+    state.voice_rejoin.store(0, std::sync::atomic::Ordering::SeqCst);
     log::info!(
         "Voice (oto) подключено: phase={:?} rtt={:?}",
         conn.state().phase(),
@@ -776,14 +827,25 @@ async fn connect_voice(
     let _ = app.emit("voice_status", json!({"status": "connected"}));
 
     // Насос событий соединения → UI-статусы.
+    // Фильтр по поколению: события заменённого (закрытого) соединения не трогаем.
     let pump_app = app.clone();
+    let my_gen = conn.state().generation();
     let mut sub = conn
         .subscribe_events()
         .map_err(|e| format!("oto subscribe: {e}"))?;
     tokio::spawn(async move {
         loop {
             match sub.recv().await {
-                Ok(event) => match event {
+                Ok(event) => {
+                    let foreign = match &event {
+                        oto::ConnectionEvent::StateChanged { generation, .. } => *generation != my_gen,
+                        oto::ConnectionEvent::Failure(f) => f.generation() != my_gen,
+                        _ => false,
+                    };
+                    if foreign {
+                        continue;
+                    }
+                    match event {
                     oto::ConnectionEvent::StateChanged { phase, .. } => {
                         log::debug!("Voice (oto) phase: {phase:?}");
                         let (status, err) = match phase {
@@ -818,8 +880,9 @@ async fn connect_voice(
                         let _ = pump_app.emit("voice_status", json!({"status": "left"}));
                         break;
                     }
-                    _ => {}
-                },
+                        _ => {}
+                    }
+                }
                 Err(_) => break,
             }
         }

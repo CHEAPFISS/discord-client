@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 /// Отправитель сообщений Gateway (op 4, heartbeat и т.д.) — bridges команды к ws-задаче.
@@ -55,6 +56,8 @@ pub struct DiscordState {
     pub voice_conn: Arc<Mutex<VoiceSlot>>,
     /// Сериализация голосовых подключений (токен одноразовый, параллельные коннекты запрещены).
     pub voice_connect_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Счётчик авто-переподключений (re-join) после 4014/4022 NeedsFreshVoiceInfo.
+    pub voice_rejoin: Arc<AtomicU64>,
 }
 
 /// Цель подключения к голосовому каналу + собранные данные авторизации.
@@ -82,6 +85,7 @@ impl Default for DiscordState {
             voice: Arc::new(Mutex::new(None)),
             voice_conn: Arc::new(Mutex::new(VoiceSlot::default())),
             voice_connect_lock: Arc::new(tokio::sync::Mutex::new(())),
+            voice_rejoin: Arc::new(AtomicU64::new(0)),
         }
     }
 }
