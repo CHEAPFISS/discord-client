@@ -1595,7 +1595,9 @@ fn main() {
                 }
             }
             // Монитор состояния отправки микрофона (диагностика «пропадания звука»).
-            tokio::spawn(mic_stats_task(app.handle().clone()));
+            // setup идёт вне tokio-контекста — нужен tauri::async_runtime,
+            // иначе паника "there is no reactor running".
+            tauri::async_runtime::spawn(mic_stats_task(app.handle().clone()));
             Ok(())
         })
         .run(generate_context!())
