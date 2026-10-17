@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 
 /// Отправитель сообщений Gateway (op 4, heartbeat и т.д.) — bridges команды к ws-задаче.
@@ -55,6 +55,8 @@ pub struct DiscordState {
     pub voice_rejoin: Arc<AtomicU64>,
     /// Отправитель микрофонного аудио в oto (None вне голоса).
     pub mic_sender: Arc<Mutex<Option<oto::PacedAudioSender>>>,
+    /// Глухота (self_deaf): серверу в op 4 + гашение приёма звука.
+    pub self_deaf: Arc<AtomicBool>,
 }
 
 /// Цель подключения к голосовому каналу + собранные данные авторизации.
@@ -84,6 +86,7 @@ impl Default for DiscordState {
             voice_connect_lock: Arc::new(tokio::sync::Mutex::new(())),
             voice_rejoin: Arc::new(AtomicU64::new(0)),
             mic_sender: Arc::new(Mutex::new(None)),
+            self_deaf: Arc::new(AtomicBool::new(false)),
         }
     }
 }

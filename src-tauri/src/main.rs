@@ -887,6 +887,46 @@ async fn set_self_mute(state: State<'_, DiscordState>, muted: bool) -> Result<()
     Ok(())
 }
 
+/// Глухота (self_deaf): серверное состояние (op 4, видно другим клиентам),
+/// пауза микрофона (в Discord deafen подразумевает mute) и гашение приёма.
+#[command]
+async fn set_self_deaf(
+    state: State<'_, DiscordState>,
+    app: AppHandle,
+    deaf: bool,
+) -> Result<(), String> {
+    state.self_deaf.store(deaf, std::sync::atomic::Ordering::SeqCst);
+
+    // Deafen в Discord тянет за собой мьют микрофона; un-deaf снимает оба.
+    let sender = state.mic_sender.lock().unwrap().clone();
+    if let Some(sender) = sender {
+        let _ = sender.set_paused(deaf).await.map_err(|e| format!("deaf mute: {e}"));
+    }
+
+    // op 4 — обновить self_mute/self_deaf в голосовом состоянии.
+    let target = state
+        .voice
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|v| (v.guild_id.clone(), v.channel_id.clone()));
+    if let Some((guild_id, channel_id)) = target {
+        let op4 = json!({
+            "op": 4,
+            "d": {
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "self_mute": deaf,
+                "self_deaf": deaf
+            }
+        });
+        if let Err(e) = app.state::<GatewaySender>().send(op4).await {
+            log::warn!("Deaf op4: {e}");
+        }
+    }
+    Ok(())
+}
+
 /// Подключение микрофона к живому соединению. Ото требует готовой DAVE-группы
 /// на момент attach (ошибка DaveRequired, сам не ретраит) — поэтому ретраим:
 /// в свежем канале ExecuteTransition приходит через ~сотню мс после коннекта.
@@ -1078,6 +1118,7 @@ fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
         voice_connect_lock: state.voice_connect_lock.clone(),
         voice_rejoin: state.voice_rejoin.clone(),
         mic_sender: state.mic_sender.clone(),
+        self_deaf: state.self_deaf.clone(),
     }
 }
 
@@ -1368,6 +1409,14 @@ async fn connect_voice(
                 oto::ConnectionEvent::AudioReceived { opus, missing, .. } => {
                     // Кадр уже расшифрован oto (автор определён по ratchet'у
                     // отправителя). По-кадровых логов нет — до 100 кадров/с.
+                    // Deafen: кадры не доигрываем вовсе (без расхода декодера).
+                    if pump_app
+                        .state::<DiscordState>()
+                        .self_deaf
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        continue;
+                    }
                     let _ = audio_tx.send((opus, missing as u8)).await;
                 }
                 oto::ConnectionEvent::DaveStateChanged { opcode, before, after, .. } => {
@@ -1708,7 +1757,8 @@ fn main() {
             connect_gateway,
             join_voice_channel,
             leave_voice_channel,
-            set_self_mute
+            set_self_mute,
+            set_self_deaf
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

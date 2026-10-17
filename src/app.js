@@ -325,21 +325,37 @@ function setStatus(text) {
 let micMuted = false;
 let deafened = false;
 
+function paintVoiceButtons() {
+  const mic = document.getElementById('micBtn');
+  mic.classList.toggle('active', micMuted);
+  mic.title = micMuted ? 'Микрофон заглушён' : 'Микрофон';
+  mic.textContent = micMuted ? '🔇' : '🎙';
+  const deaf = document.getElementById('deafBtn');
+  deaf.classList.toggle('active', deafened);
+  deaf.title = deafened ? 'Звук отключён' : 'Звук';
+  deaf.textContent = deafened ? '🔇' : '🔊';
+}
+
 document.getElementById('micBtn').onclick = async () => {
+  // Deafen подразумевает mute: клик по микрофону сначала снимает глухоту.
+  if (deafened) {
+    deafened = false;
+    micMuted = false;
+    try { await invoke('set_self_deaf', { deaf: false }); } catch (_) {}
+    paintVoiceButtons();
+    return;
+  }
   micMuted = !micMuted;
   try { await invoke('set_self_mute', { muted: micMuted }); } catch (_) {}
-  const btn = document.getElementById('micBtn');
-  btn.classList.toggle('active', micMuted);
-  btn.title = micMuted ? 'Микрофон заглушён' : 'Микрофон';
-  btn.textContent = micMuted ? '🔇' : '🎙';
+  paintVoiceButtons();
 };
 
-document.getElementById('deafBtn').onclick = () => {
+document.getElementById('deafBtn').onclick = async () => {
   deafened = !deafened;
-  const btn = document.getElementById('deafBtn');
-  btn.classList.toggle('active', deafened);
-  btn.title = deafened ? 'Звук отключён' : 'Звук';
-  btn.textContent = deafened ? '🔇' : '🔊';
+  try { await invoke('set_self_deaf', { deaf: deafened }); } catch (_) {}
+  // Как в Discord: deafen тянет мьют микрофона, un-deaf снимает оба.
+  micMuted = deafened;
+  paintVoiceButtons();
 };
 
 hangupBtn.onclick = async () => {
@@ -391,6 +407,10 @@ if (listen) {
       currentVoiceChannelId = null;
       setStatus('');
       voiceCall.classList.remove('active');
+      // Свежий вход в канал всегда unmuted/un-deaf (op 4 при join) — кнопки сбросим.
+      micMuted = false;
+      deafened = false;
+      paintVoiceButtons();
     } else if (p.status === 'joining') {
       setStatus('Подключаюсь…');
     } else if (p.status === 'connected') {
