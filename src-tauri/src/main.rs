@@ -793,6 +793,30 @@ async fn join_voice_channel(
         guard.as_ref().ok_or("Не залогинен")?.user_id.clone()
     };
 
+    // Повторный клик по каналу, где мы уже в голосе: живое соединение не рвём
+    // (раньше op 4 выдавал свежую пару → connect_voice пересоединялся и рвал
+    // аудио) и не сбрасываем mute/deaf. Подтверждаем UI.
+    {
+        let slot = state.voice_conn.lock().unwrap();
+        let alive = slot.conn.as_ref().is_some_and(|c| {
+            !matches!(
+                c.state().phase(),
+                oto::ConnectionPhase::Failed | oto::ConnectionPhase::Closed
+            )
+        });
+        let in_target = state
+            .voice
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|v| v.channel_id == channel_id);
+        if alive && in_target {
+            log::debug!("Voice: повторный вход в активный канал — no-op");
+            let _ = app.emit("voice_status", json!({"status": "connected"}));
+            return Ok(());
+        }
+    }
+
     // фиксируем цель голосового подключения
     state.voice_rejoin.store(0, std::sync::atomic::Ordering::SeqCst);
     {
@@ -1534,25 +1558,48 @@ fn play_audio_blocking(
 
     let out_buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
     let buf_clone = out_buf.clone();
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let underruns = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
-    // Де-джиттер: пока в кольце меньше ~96 мс звук — отдаём тишину и копим
-    // запас. Без этого соседние пакеты (всплески задержки сети) истощали
-    // буфер мгновенно и получались «дробления».
+    // Де-джиттер: при СТАРТЕ ждём ~96 мс запаса (иначе всплески задержки сети
+    // истощали буфер мгновенно и получались «дробления»). Дальше порог НЕ
+    // применяется: ранее он действовал на каждом тике вывода — каждое
+    // проседание очереди ниже 96 мс глухо обнуляло выход (в очереди ещё лежал
+    // настоящий звук!) и давало периодические «прерывания с бульканием».
+    // В потоке — естественный дренаж до пустой очереди; такие underrun'ы
+    // считаем и логируем для наблюдения.
     const PREBUFFER_SAMPLES: usize = 48000 * 2 * 96 / 1000; // 48к × 2 канала × 96 мс
 
     let stream = device
         .build_output_stream(
             &config,
-            move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                let mut buf = buf_clone.lock().unwrap();
-                if buf.len() < PREBUFFER_SAMPLES {
-                    for sample in output.iter_mut() {
-                        *sample = 0.0;
+            {
+                let started = started.clone();
+                let underruns = underruns.clone();
+                move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    let mut buf = buf_clone.lock().unwrap();
+                    if buf.len() < PREBUFFER_SAMPLES
+                        && !started.load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        for sample in output.iter_mut() {
+                            *sample = 0.0;
+                        }
+                        return;
                     }
-                    return;
-                }
-                for sample in output.iter_mut() {
-                    *sample = buf.pop_front().unwrap_or(0.0).clamp(-1.0, 1.0);
+                    started.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let mut drained_dry = false;
+                    for sample in output.iter_mut() {
+                        match buf.pop_front() {
+                            Some(s) => *sample = s.clamp(-1.0, 1.0),
+                            None => {
+                                *sample = 0.0;
+                                drained_dry = true;
+                            }
+                        }
+                    }
+                    if drained_dry {
+                        underruns.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
             },
             move |err| log::warn!("cpal stream error: {err}"),
@@ -1566,6 +1613,11 @@ fn play_audio_blocking(
     // Последний удачно декодированный пакет: источник FEC-восстановления
     // для пропущенных кадров.
     let mut last_packet: Vec<u8> = Vec::new();
+    // Раз в 10 с: глубина джиттер-очереди и счётчик underrun'ов (пустой
+    // очереди на тике вывода). Рост underruns = устройству не хватает данных
+    // (сеть/загрузка), «шум похлёбываний» в звучании.
+    let mut last_report = std::time::Instant::now();
+    let mut last_underruns: u64 = 0;
     while let Some((opus, missing)) = rx.blocking_recv() {
         // Скрытие потерь: на каждый пропущенный кадр — FEC-декод предыдущего
         // пакета (libopus дорисовывает скрытый кадр по redundancy), иначе
@@ -1604,6 +1656,17 @@ fn play_audio_blocking(
             buf.pop_front();
         }
         drop(buf);
+        if last_report.elapsed() >= std::time::Duration::from_secs(10) {
+            last_report = std::time::Instant::now();
+            let depth_ms = out_buf.lock().unwrap().len() as f64 * 1000.0 / 48000.0 / 2.0;
+            let und = underruns.load(std::sync::atomic::Ordering::Relaxed);
+            if und > last_underruns {
+                last_underruns = und;
+                log::info!("Playback: глубина {depth_ms:.0} мс, underrun {und}");
+            } else {
+                log::debug!("Playback: глубина {depth_ms:.0} мс, underrun {und}");
+            }
+        }
         last_packet = opus;
     }
     Ok(())
