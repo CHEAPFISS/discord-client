@@ -964,10 +964,12 @@ async fn attach_mic_task(app: AppHandle, conn: oto::VoiceConnection) {
 async fn mic_stats_task(app: AppHandle) {
     let mut last_phase: Option<String> = None;
     let mut last_frames_key: (String, u64, u64) = (String::new(), 0, 0);
-    // Терминальный Failed (обычно контракт poll: >2 мс CPU у кадра). Каждую
-    // секунду пробуем replace_source новым MicSource: oto продолжит ту же
-    // сессию — это заменяет ручной перезаход, который делал пользователь.
+    // Терминальный Failed (SendIo при обрыве сети, контракт poll и т.п.):
+    // 3 быстрые попытки replace_source/переattach, далее раз в 10 с без конца —
+    // сеть нередко возвращается через десятки секунд.
     let mut fails_in_a_row: u32 = 0;
+    let mut last_fail_attempt_ms: u64 = 0;
+    let mut last_missing_attach: Option<std::time::Instant> = None;
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         let sender = {
@@ -976,6 +978,33 @@ async fn mic_stats_task(app: AppHandle) {
             guard.clone()
         };
         let Some(sender) = sender else {
+            // Пасера нет: либо не в голосе, либо attach_mic_task исчерпал
+            // свои 8 попыток и вышел. Пока пользователь в голосовом канале —
+            // пробуем снова (не чаще раза в 5 с), иначе после обрыва сети
+            // канал останется без микрофона до перезахода.
+            let in_voice = app
+                .state::<DiscordState>()
+                .voice
+                .lock()
+                .unwrap()
+                .is_some();
+            if in_voice {
+                let due = last_missing_attach.map_or(true, |t| t.elapsed().as_secs() >= 5);
+                if due {
+                    last_missing_attach = Some(std::time::Instant::now());
+                    if let Some(conn) = app
+                        .state::<DiscordState>()
+                        .voice_conn
+                        .lock()
+                        .unwrap()
+                        .conn
+                        .clone()
+                    {
+                        log::info!("Микрофон: отправителя нет, соединение живо — переattach");
+                        tokio::spawn(attach_mic_task(app.clone(), conn));
+                    }
+                }
+            }
             continue;
         };
         let now_ms = std::time::SystemTime::now()
@@ -987,10 +1016,15 @@ async fn mic_stats_task(app: AppHandle) {
         let phase = format!("{:?}", snap.phase());
 
         if matches!(snap.phase(), oto::AudioPhase::Failed) {
-            if fails_in_a_row >= 3 {
-                continue; // устройство системно отвалилось — читаем лог, не молотим
+            fails_in_a_row = fails_in_a_row.saturating_add(1);
+            // Первые 3 попытки ежесекундно, дальше раз в 10 с — и без конца.
+            // Бывший вечный cap («не молотим») молчал ровно с возвратом сети:
+            // attach успевал умереть 3 раза за обрыв Wi-Fi, и микрофон
+            // оставался мёртвым до перезахода в канал.
+            if fails_in_a_row > 3 && now_ms.saturating_sub(last_fail_attempt_ms) < 10_000 {
+                continue;
             }
-            fails_in_a_row += 1;
+            last_fail_attempt_ms = now_ms;
             log::warn!(
                 "Микрофон/пасер: Failed (failure={:?}) — авто-восстановление, попытка {fails_in_a_row}",
                 snap.failure(),
@@ -1011,6 +1045,9 @@ async fn mic_stats_task(app: AppHandle) {
                         log::warn!("Микрофон/пасер: replace_source не удался ({e}) — переattach");
                         let state = app.state::<DiscordState>();
                         state.mic_sender.lock().unwrap().take();
+                        // Метка для ветки «пасера нет»: не спавнить второй
+                        // attach, пока этот ещё крутит свои попытки.
+                        last_missing_attach = Some(std::time::Instant::now());
                         let conn = state.voice_conn.lock().unwrap().conn.clone();
                         match conn {
                             Some(conn) => {
