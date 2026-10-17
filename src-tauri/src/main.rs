@@ -1412,11 +1412,9 @@ fn play_audio_blocking(
             continue;
         }
         let mut buf = out_buf.lock().unwrap();
-        // стерео: len сэмплов на канал, чередование L/R
-        for ch in 0..2usize {
-            for i in 0..len {
-                buf.push_back(pcm[ch * len + i]);
-            }
+        // decode_float для стерео даёт interleaved [L,R,L,R…] — пушим как есть
+        for i in 0..len * 2 {
+            buf.push_back(pcm[i]);
         }
         // жёттер-буфер: не более ~2 сек вперёд
         while buf.len() > 48000 * 2 * 2 {
@@ -1443,7 +1441,10 @@ struct MicSource {
 }
 
 const MIC_FRAME_SAMPLES: usize = 960; // 20 мс моно при 48 кГц
-const MIC_RING_MAX: usize = 48000 * 4; // ~4 сек аудио в кольце
+// Потолок ~80 мс: часы микрофона и пасера расходятся, а пасер после каждого
+// запаздывания пере-планирует дедлайн «от текущего момента» — без жёсткого
+// потолка задержка растёт бесконечно (и целиком остаётся после unmute).
+const MIC_RING_MAX: usize = MIC_FRAME_SAMPLES * 4;
 
 impl MicSource {
     fn new() -> Result<Self, String> {
