@@ -32,14 +32,29 @@ pub struct VoiceConnectionMeta {
 /// Активное голосовое соединение (oto) — держим хендл живым, иначе соединение закроется.
 pub type ActiveVoiceConnection = oto::VoiceConnection;
 
+/// Хендл активного oto-соединения + session_id, для которого оно создавалось.
+/// Токен Discord одноразовый — повторное подключение на ту же сессию даёт 4014/4022.
+pub struct VoiceSlot {
+    pub conn: Option<ActiveVoiceConnection>,
+    pub session_id: Option<String>,
+}
+
+impl Default for VoiceSlot {
+    fn default() -> Self {
+        Self { conn: None, session_id: None }
+    }
+}
+
 // --- Состояние приложения ---
 
 pub struct DiscordState {
     pub session: Arc<Mutex<Option<DiscordSession>>>,
     /// Данные голосового подключения (session_id/token/endpoint приходят асинхронно).
     pub voice: Arc<Mutex<Option<VoiceData>>>,
-    /// Хендл активного oto-соединения (None = не подключены).
-    pub voice_conn: Arc<Mutex<Option<ActiveVoiceConnection>>>,
+    /// Хендл активного oto-соединения + сессия, для которой оно создавалось.
+    pub voice_conn: Arc<Mutex<VoiceSlot>>,
+    /// Сериализация голосовых подключений (токен одноразовый, параллельные коннекты запрещены).
+    pub voice_connect_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Цель подключения к голосовому каналу + собранные данные авторизации.
@@ -65,7 +80,8 @@ impl Default for DiscordState {
         Self {
             session: Arc::new(Mutex::new(None)),
             voice: Arc::new(Mutex::new(None)),
-            voice_conn: Arc::new(Mutex::new(None)),
+            voice_conn: Arc::new(Mutex::new(VoiceSlot::default())),
+            voice_connect_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }

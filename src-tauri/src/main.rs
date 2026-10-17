@@ -219,17 +219,8 @@ async fn handle_voice_state(app: &AppHandle, d: &serde_json::Value) {
             if !session_id.is_empty() {
                 voice.session_id = Some(session_id);
             }
-            if voice.session_id.is_some() && voice.token.is_some() && voice.endpoint.is_some() {
-                let payload = json!({
-                    "guild_id": voice.guild_id,
-                    "channel_id": voice.channel_id,
-                    "session_id": voice.session_id,
-                    "token": voice.token,
-                    "endpoint": voice.endpoint,
-                });
-                log::info!("Голосовое подключение собрано: {payload}");
-                let _ = app.emit("voice_channel_ready", payload);
-            }
+            // Подключаемся только когда придёт свежий token (VOICE_SERVER_UPDATE) —
+            // иначе используем протухший и получим 4014/4022.
         }
     }
 }
@@ -253,8 +244,27 @@ async fn handle_voice_server(app: &AppHandle, d: &serde_json::Value) {
                     "token": voice.token,
                     "endpoint": voice.endpoint,
                 });
-                log::info!("Голосовое подключение собрано: {payload}");
+                log::info!(
+                    "Голосовое подключение собрано: guild={} channel={} session={} token=<redacted>",
+                    voice.guild_id, voice.channel_id, voice.session_id.clone().unwrap_or_default()
+                );
                 let _ = app.emit("voice_channel_ready", payload);
+
+                // Авто-подключение из бэкенда: свежий токен одноразовый, тратим сразу.
+                let app2 = app.clone();
+                let discord_state = clone_state(&state);
+                let guild_ids = voice.guild_id.clone();
+                let channel_ids = voice.channel_id.clone();
+                let session_id = voice.session_id.clone().unwrap();
+                let token = voice.token.clone().unwrap();
+                let endpoint = voice.endpoint.clone().unwrap();
+                tokio::spawn(async move {
+                    if let Err(e) = connect_voice(
+                        app2, discord_state, guild_ids, channel_ids, session_id, token, endpoint,
+                    ).await {
+                        log::error!("Voice error: {e}");
+                    }
+                });
             }
         }
     }
@@ -642,7 +652,8 @@ async fn leave_voice_channel(
         guild
     };
     // закрываем oto-соединение, если активно
-    let active_conn = state.voice_conn.lock().unwrap().take();
+    let active_conn = state.voice_conn.lock().unwrap().conn.take();
+    state.voice_conn.lock().unwrap().session_id = None;
     if let Some(conn) = active_conn {
         let _ = conn.shutdown().await;
     }
@@ -664,8 +675,17 @@ async fn leave_voice_channel(
 
 /// Голосовое подключение к серверу Discord:
 /// Voice WebSocket (identify → READY с ssrc) → UDP (IP Discovery → Select Protocol → Heartbeat).
-/// Голосовое подключение Discord через oto: Voice Gateway v8 + DAVE (E2EE) + RTP.
-/// DAVE обязателен с марта 2026 — без него Discord закрывает voice WS кодом 4017.
+/// Клоны Arc-полей состояния для spawned задач.
+fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
+    DiscordState {
+        session: state.session.clone(),
+        voice: state.voice.clone(),
+        voice_conn: state.voice_conn.clone(),
+        voice_connect_lock: state.voice_connect_lock.clone(),
+    }
+}
+
+/// Команда для совместимости (старый фронт) — реальная работа в connect_voice.
 #[command]
 async fn voice_udp_connect(
     app: AppHandle,
@@ -675,6 +695,22 @@ async fn voice_udp_connect(
     endpoint: String,
     guild_id: String,
     channel_id: String,
+) -> Result<(), String> {
+    let st = clone_state(&state);
+    connect_voice(app, st, guild_id, channel_id, session_id, token, endpoint).await
+}
+
+/// Голосовое подключение Discord через oto: Voice Gateway v8 + DAVE (E2EE) + RTP.
+/// DAVE обязателен с марта 2026 — без него Discord закрывает voice WS кодом 4017.
+/// Токен Discord одноразовый: сериализуем подключение локом и дедуплим по session_id.
+async fn connect_voice(
+    app: AppHandle,
+    state: DiscordState,
+    guild_ids: String,
+    channel_ids: String,
+    session_id: String,
+    token: String,
+    endpoint_in: String,
 ) -> Result<(), String> {
     let user_id = {
         let guard = state.session.lock().unwrap();
@@ -686,38 +722,57 @@ async fn voice_udp_connect(
             .parse::<u64>()
             .map_err(|e| format!("user_id: {e}"))?
     };
-    let guild = guild_id.parse::<u64>().map_err(|e| format!("guild_id: {e}"))?;
-    let channel = channel_id.parse::<u64>().map_err(|e| format!("channel_id: {e}"))?;
-    let endpoint = endpoint.trim().trim_start_matches("wss://").to_string();
+    let guild = guild_ids.parse::<u64>().map_err(|e| format!("guild_id: {e}"))?;
+    let channel = channel_ids.parse::<u64>().map_err(|e| format!("channel_id: {e}"))?;
+    let endpoint = endpoint_in.trim().trim_start_matches("wss://").to_string();
 
-    log::info!("Voice connect (oto): guild={guild} channel={channel} endpoint={endpoint}");
+    let _guard = state.voice_connect_lock.lock().await;
 
-    // Закрываем прежнее соединение, если оно осталось от прошлого канала.
-    let prev = state.voice_conn.lock().unwrap().take();
-    if let Some(prev) = prev {
-        let _ = prev.shutdown().await;
+    // Дедуп: эта сессия уже подключена (эхо VOICE_STATE_UPDATE / повторный invoke).
+    {
+        let slot = state.voice_conn.lock().unwrap();
+        if slot.session_id.as_deref() == Some(session_id.as_str()) && slot.conn.is_some() {
+            log::debug!("Voice: session уже подключена, дедуп-пропуск");
+            return Ok(());
+        }
     }
+
+    log::info!(
+        "Voice connect (oto): guild={guild} channel={channel} session={session_id} endpoint={endpoint}"
+    );
 
     let info = oto::VoiceConnectInfo::new(
         guild,
         user_id,
         channel,
-        session_id,
+        session_id.clone(),
         endpoint,
         oto::VoiceToken::new(token),
     );
     let oto = oto::Oto::builder().build().map_err(|e| format!("oto init: {e}"))?;
-    let conn = oto
-        .connect(info)
-        .await
-        .map_err(|e| format!("oto connect: {e}"))?;
+
+    // Помечаем сессию заранее и забираем/закрываем прежнее соединение.
+    let prev = {
+        let mut slot = state.voice_conn.lock().unwrap();
+        slot.session_id = Some(session_id.clone());
+        slot.conn.take()
+    };
+    if let Some(prev) = prev {
+        let _ = prev.shutdown().await;
+    }
+
+    let conn = oto.connect(info).await.map_err(|e| {
+        // сброс пометки, чтобы следующие события голоса могли попытаться снова
+        state.voice_conn.lock().unwrap().session_id = None;
+        format!("oto connect: {e}")
+    })?;
     log::info!(
         "Voice (oto) подключено: phase={:?} rtt={:?}",
         conn.state().phase(),
         conn.state().gateway_rtt()
     );
 
-    *state.voice_conn.lock().unwrap() = Some(conn.clone());
+    state.voice_conn.lock().unwrap().conn = Some(conn.clone());
     let _ = app.emit("voice_status", json!({"status": "connected"}));
 
     // Насос событий соединения → UI-статусы.
