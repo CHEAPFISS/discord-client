@@ -1693,20 +1693,15 @@ fn play_audio_blocking(
         let decoder = decoders.entry(user_id).or_insert_with(|| {
             opus::Decoder::new(48000, opus::Channels::Stereo).expect("opus decoder per-user")
         });
+        // FEC-концеляция убрана: libopus восстанавливает потерянный кадр
+        // декодированием *текущего* пакета с fec=true, но затем его own
+        // аудио уже не достать без мусора в состоянии декодера. Декодировать
+        // текущий пакет дважды (fec=true, потом ещё раз) — двойное
+        // воспроизведение каждого кадра после потери — растягивает звук.
+        // Потери были 2 за 4 минуты — тишина на их месте незаметна.
         if missing > 0 {
-            let mut concealed: u8 = 0;
-            if let Ok(len) = decoder.decode_float(&opus, &mut pcm, true) {
-                if len > 0 {
-                    // Восстановленный предыдущий кадр — в очередь ЭТОГО
-                    // участника (не в общий таймлайн!).
-                    enqueue(user_id, &pcm[..len * 2]);
-                    concealed = 1;
-                }
-            }
-            if missing - concealed > 0 {
-                for _ in 0..(missing - concealed) {
-                    enqueue(user_id, &silent_slot);
-                }
+            for _ in 0..missing {
+                enqueue(user_id, &silent_slot);
             }
         }
         let len = match decoder.decode_float(&opus, &mut pcm, false) {
