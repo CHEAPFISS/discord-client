@@ -1659,6 +1659,10 @@ impl MicSource {
         let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let encoded: Arc<Mutex<VecDeque<Vec<u8>>>> = Arc::new(Mutex::new(VecDeque::new()));
         let waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
+        // Шумодав можно выключить для A/B-теста качества: DSC_DENOISE=0.
+        let denoise_enabled = std::env::var("DSC_DENOISE")
+            .map(|v| !matches!(v.as_str(), "0" | "false" | "off"))
+            .unwrap_or(true);
 
         // Рабочий поток: вся тяжёлая работа (RNNoise + opus) — вне poll. Контракт
         // FrameSource ограничивает poll двумя мс CPU на кадр; денойзер (пара
@@ -1710,21 +1714,26 @@ impl MicSource {
 
                         // 2) RNNoise: вход/выход в масштабе i16 (±32768), а не ±1 —
                         // так требует документация модели. 960 сэмплов = 2 прогона.
-                        let warm = denoise_warmed;
-                        let mut dn_in = [0.0f32; nnnoiseless::DenoiseState::FRAME_SIZE];
-                        let mut dn_out = [0.0f32; nnnoiseless::DenoiseState::FRAME_SIZE];
-                        for chunk in mono.chunks_exact_mut(nnnoiseless::DenoiseState::FRAME_SIZE) {
-                            for (d, s) in dn_in.iter_mut().zip(chunk.iter()) {
-                                *d = s * 32768.0;
-                            }
-                            denoiser.process_frame(&mut dn_out, &dn_in);
-                            if warm {
-                                for (s, d) in chunk.iter_mut().zip(dn_out.iter()) {
-                                    *s = d / 32768.0;
+                        // DSC_DENOISE=0 — прямой путь (A/B-тест качества модели).
+                        if denoise_enabled {
+                            let warm = denoise_warmed;
+                            let mut dn_in = [0.0f32; nnnoiseless::DenoiseState::FRAME_SIZE];
+                            let mut dn_out = [0.0f32; nnnoiseless::DenoiseState::FRAME_SIZE];
+                            for chunk in
+                                mono.chunks_exact_mut(nnnoiseless::DenoiseState::FRAME_SIZE)
+                            {
+                                for (d, s) in dn_in.iter_mut().zip(chunk.iter()) {
+                                    *d = s * 32768.0;
+                                }
+                                denoiser.process_frame(&mut dn_out, &dn_in);
+                                if warm {
+                                    for (s, d) in chunk.iter_mut().zip(dn_out.iter()) {
+                                        *s = d / 32768.0;
+                                    }
                                 }
                             }
+                            denoise_warmed = true;
                         }
-                        denoise_warmed = true;
 
                         // 3) opus 64 kbps stereo (дублируем моно в L/R, как раньше).
                         stereo.clear();
