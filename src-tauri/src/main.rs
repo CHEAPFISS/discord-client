@@ -1518,24 +1518,31 @@ async fn play_audio_task(
     handle.await.map_err(|e| format!("join playback task: {e}"))?
 }
 
-/// Воспроизведение входящего голоса: Opus-decode (per-user) → МИКШЕР → cpal output.
+/// Воспроизведение входящего голоса: Opus-decode (per-user) → cpal output.
 /// Кадр Opus: 20 мс, 48 кГц, стерео, float.
 ///
-/// Микшер: каждый участник — своя очередь 20-мс секторов («pending»); в общий
-/// буфер попадает ПОСЕКТОРНАЯ сумма участников (молчащий = нули). Раньше
-/// кадры игрались последовательно: двое говорили одновременно → два таймлайна
-/// в одной очереди (40 мс речи на 20 мс времени) → очередь раздувалась и
-/// «лагало». Сектора остаются выровненными, т.к. SFU двигает тишину (DTX)
-/// для каждого sender'а с той же частотой 50 кадров/с.
+/// МИКШЕР — в колбэке вывода: у каждого участника СВОЯ очередь воспроизведения
+/// (свой prebuffer 96 мс), суммирование голосов происходит при выборке.
+/// Ранее «микширование» было сериальным: общий буфер, кадры двоих игрались
+/// по очереди (40 мс речи на каждые 20 мс времени) → очередь росла и голоса
+/// «лагали». Попытка выравнивать arrival-time сектора тоже не работает: кадры
+/// приходят с разлётом ±10 мс и не совпадают в one общем окне.
+///
+/// Дрейф часов: consumed — колбэк (локальный DAC), produced — декод (RTP).
+/// При N одновременно говорящих produced ≈ N×consumed, отрицательный сдвиг
+/// drift'а при миксе — норма; смысл метрики — при одиночном говорящем.
+struct UserPlayback {
+    /// Интерлевированные декодированные сэмплы (L,R,L,R…) этого участника.
+    samples: std::collections::VecDeque<f32>,
+    /// Свой prebuffer: поток участника начинает играть после накопления.
+    started: bool,
+}
 fn play_audio_blocking(
     mut rx: tokio::sync::mpsc::Receiver<(u64, Vec<u8>, u8)>,
 ) -> Result<(), String> {
     // Декодер на КАЖДОГО участника: libopus хранит PLC/фазовое состояние,
     // общим кодеком кадры разных говорящих давали «булькание» при сменах.
     let mut decoders: std::collections::HashMap<u64, opus::Decoder> =
-        std::collections::HashMap::new();
-    // Очередь 20-мс секторов каждого участника для покадрового микширования.
-    let mut pending: std::collections::HashMap<u64, std::collections::VecDeque<Vec<f32>>> =
         std::collections::HashMap::new();
     // Счётчики дрейфа часов: произведено/потреблено (см. отчёт раз в 10 с).
     let produced = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -1574,51 +1581,64 @@ fn play_audio_blocking(
     }
     let config: cpal::StreamConfig = config.into();
 
-    let out_buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
-    let buf_clone = out_buf.clone();
-    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Очереди воспроизведения участников: у каждого своя, суммирование в колбэке.
+    let out_map: Arc<Mutex<std::collections::HashMap<u64, UserPlayback>>> =
+        Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let map_clone = out_map.clone();
     let underruns = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
-    // Де-джиттер: при СТАРТЕ ждём ~96 мс запаса (иначе всплески задержки сети
-    // истощали буфер мгновенно и получались «дробления»). Дальше порог НЕ
-    // применяется: ранее он действовал на каждом тике вывода — каждое
-    // проседание очереди ниже 96 мс глухо обнуляло выход (в очереди ещё лежал
-    // настоящий звук!) и давало периодические «прерывания с бульканием».
-    // В потоке — естественный дренаж до пустой очереди; такие underrun'ы
-    // считаем и логируем для наблюдения.
+    // Де-джиттер: порог действует у КАЖДОГО участника при старте ЕГО потока —
+    // ждём ~96 мс запаса (иначе всплески задержки сети истощали буфер
+    // мгновенно и получались «дробления»). Дальше порог НЕ применяется:
+    // ранее он действовал на каждом тике вывода — каждое проседание очереди
+    // ниже 96 мс глухо обнуляло выход (в очереди ещё лежал настоящий звук!)
+    // и давало периодические «прерывания с бульканием». В потоке —
+    // естественный дренаж до пустой очереди; такие underrun'ы считаем.
     const PREBUFFER_SAMPLES: usize = 48000 * 2 * 96 / 1000; // 48к × 2 канала × 96 мс
 
     let stream = device
         .build_output_stream(
             &config,
             {
-                let started = started.clone();
                 let underruns = underruns.clone();
                 let consumed_cb = consumed_cb.clone();
+                let map_clone = map_clone.clone();
                 move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     consumed_cb
                         .fetch_add(output.len() as u64, std::sync::atomic::Ordering::Relaxed);
-                    let mut buf = buf_clone.lock().unwrap();
-                    if buf.len() < PREBUFFER_SAMPLES
-                        && !started.load(std::sync::atomic::Ordering::Relaxed)
-                    {
-                        for sample in output.iter_mut() {
-                            *sample = 0.0;
+                    let mut users = map_clone.lock().unwrap();
+                    // Свой prebuffer у каждого участника: его поток начинает
+                    // играть только после накопления запаса; прошёл порог —
+                    // играет непрерывно (потери масштаба канала не глушим).
+                    for up in users.values_mut() {
+                        if !up.started && up.samples.len() >= PREBUFFER_SAMPLES {
+                            up.started = true;
                         }
-                        return;
                     }
-                    started.store(true, std::sync::atomic::Ordering::Relaxed);
-                    let mut drained_dry = false;
-                    for sample in output.iter_mut() {
-                        match buf.pop_front() {
-                            Some(s) => *sample = s.clamp(-1.0, 1.0),
-                            None => {
-                                *sample = 0.0;
-                                drained_dry = true;
+                    let any_started = users.values().any(|up| up.started);
+                    // МИКС: сумма потоков начавших участников. Пустая очередь у
+                    // молчащего/отстающего — тишина в его колонке, чужая речь
+                    // не страдает. Остаток очереди, не влезший в тик, возьмём
+                    // в следующем.
+                    let mut played_any = false;
+                    for up in users.values_mut() {
+                        if !up.started {
+                            continue;
+                        }
+                        let take = output.len().min(up.samples.len());
+                        if take > 0 {
+                            played_any = true;
+                            for (o, s) in output.iter_mut().zip(up.samples.drain(0..take)) {
+                                *o += s;
                             }
                         }
                     }
-                    if drained_dry {
+                    for sample in output.iter_mut() {
+                        *sample = sample.clamp(-1.0, 1.0);
+                    }
+                    if !played_any && any_started {
+                        // Все начавшие участницы на тике сухие (очереди
+                        // опустели: сеть/загрузка) — посчитаем underrun-тик.
                         underruns.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
@@ -1631,6 +1651,23 @@ fn play_audio_blocking(
 
     let mut pcm = vec![0.0f32; 5760 * 2]; // максимум кадра Opus (120 мс) × 2 канала
     let silent_slot = vec![0.0f32; 960 * 2]; // 20 мс стерео — для дыры без FEC
+    // Декодированное уходит в ОЧЕРЕДЬ УЧАСТНИКА (суммирование — в колбэке).
+    // Кап 2 с на участника — аварийный (от операции в двух секундах от
+    // молчащего колонка убегать нечем: гнать с головы).
+    let enqueue = |uid: u64, samples: &[f32]| {
+        let mut users = out_map.lock().unwrap();
+        let up = users
+            .entry(uid)
+            .or_insert_with(|| UserPlayback {
+                samples: std::collections::VecDeque::new(),
+                started: false,
+            });
+        up.samples.extend(samples.iter().copied());
+        while up.samples.len() > 48000 * 2 * 2 {
+            up.samples.pop_front();
+        }
+        produced.fetch_add(samples.len() as u64, std::sync::atomic::Ordering::Relaxed);
+    };
     // Раз в 10 с: глубина джиттер-очереди, underrun'ы и дрейф часов (окно):
     // положительный drift = потребление обгоняет производство — буфер убывает.
     let mut last_report = std::time::Instant::now();
@@ -1650,15 +1687,15 @@ fn play_audio_blocking(
             let mut concealed: u8 = 0;
             if let Ok(len) = decoder.decode_float(&opus, &mut pcm, true) {
                 if len > 0 {
-                    let mut buf = out_buf.lock().unwrap();
-                    buf.extend(&pcm[..len * 2]);
+                    // Восстановленный предыдущий кадр — в очередь ЭТОГО
+                    // участника (не в общий таймлайн!).
+                    enqueue(user_id, &pcm[..len * 2]);
                     concealed = 1;
                 }
             }
             if missing - concealed > 0 {
-                let mut buf = out_buf.lock().unwrap();
                 for _ in 0..(missing - concealed) {
-                    buf.extend(silent_slot.iter().copied());
+                    enqueue(user_id, &silent_slot);
                 }
             }
         }
@@ -1672,47 +1709,14 @@ fn play_audio_blocking(
         if len == 0 {
             continue;
         }
-        // Сектор участника — в его очередь (кап ~1.2 с на всплеск: не съедает
-        // память, миксер выровняет).
-        let chunk = pcm[..len * 2].to_vec();
-        {
-            let q = pending
-                .entry(user_id)
-                .or_insert_with(std::collections::VecDeque::new);
-            q.push_back(chunk);
-            while q.len() > 60 {
-                q.pop_front();
-            }
-        }
-
-        // МИКШЕР: слить готовые сектора участников в общий таймлайн. Берём
-        // по максимальному заполнению: у кого нет своего сектора — в этом
-        // слоте нули (DTX-SFU держит счётчики секторов синхронными); ушедшие
-        // (пустая очередь) миксер не блокируют.
-        loop {
-            if !pending.values().any(|q| !q.is_empty()) {
-                break;
-            }
-            let mut slot = vec![0.0f32; 960 * 2];
-            for q in pending.values_mut() {
-                if let Some(chunk) = q.pop_front() {
-                    for (acc, s) in slot.iter_mut().zip(chunk.iter()) {
-                        *acc += *s;
-                    }
-                }
-            }
-            produced.fetch_add(slot.len() as u64, std::sync::atomic::Ordering::Relaxed);
-            let mut buf = out_buf.lock().unwrap();
-            buf.extend(slot);
-            // жёттер-буфер: не более ~2 сек вперёд
-            while buf.len() > 48000 * 2 * 2 {
-                buf.pop_front();
-            }
-            drop(buf);
-        }
+        enqueue(user_id, &pcm[..len * 2]);
         if last_report.elapsed() >= std::time::Duration::from_secs(10) {
             last_report = std::time::Instant::now();
-            let depth_ms = out_buf.lock().unwrap().len() as f64 * 1000.0 / 48000.0 / 2.0;
+            let (depth_ms, users_no) = {
+                let users = out_map.lock().unwrap();
+                let max_len = users.values().map(|up| up.samples.len()).max().unwrap_or(0);
+                (max_len as f64 * 1000.0 / 48000.0 / 2.0, users.len())
+            };
             let und = underruns.load(std::sync::atomic::Ordering::Relaxed);
             let cons = consumed.load(std::sync::atomic::Ordering::Relaxed);
             let prod = produced.load(std::sync::atomic::Ordering::Relaxed);
@@ -1728,11 +1732,11 @@ fn play_audio_blocking(
             if und > last_underruns {
                 last_underruns = und;
                 log::info!(
-                    "Playback: глубина {depth_ms:.0} мс, underrun {und}, drift {drift_ppm:+.0} ppm"
+                    "Playback: глубина {depth_ms:.0} мс (участников {users_no}), underrun {und}, drift {drift_ppm:+.0} ppm"
                 );
             } else {
                 log::debug!(
-                    "Playback: глубина {depth_ms:.0} мс, underrun {und}, drift {drift_ppm:+.0} ppm"
+                    "Playback: глубина {depth_ms:.0} мс (участников {users_no}), underrun {und}, drift {drift_ppm:+.0} ppm"
                 );
             }
         }
