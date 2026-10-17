@@ -12,6 +12,7 @@ tokio-tungstenite = { version = "0.23", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 reqwest = { version = "0.11", features = ["json"] }
 url = "2"
+nnnoiseless = "0.5"
 log = "0.4"
 env_logger = "0.11"
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
@@ -36,3 +37,8 @@ tauri-build = { version = "2", features = [] }
 opt-level = 3
 lto = true
 codegen-units = 1
+
+# DSP-зависимости в debug-сборке: без оптимизации nnnoiseless не влезает в
+# контракт poll (≤2 мс на кадр) — oto считает это сбоем и роняет отправку.
+[profile.dev.package.nnnoiseless]
+opt-level = 3

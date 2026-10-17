@@ -1623,6 +1623,11 @@ struct MicSource {
     stereo: Vec<f32>,
     /// Моно-буфер кадра (переиспользуется — минус аллокация на каждый poll).
     mono: Vec<f32>,
+    /// RNNoise (nnnoiseless): шумодав микрофона, как в Discord. 480 сэмплов
+    /// (10 мс @ 48 кГц) — 2 прогона на 20-мс кадр.
+    denoiser: Box<nnnoiseless::DenoiseState<'static>>,
+    /// Первый выход модели содержит fade-in — на первом кадре его не записываем.
+    denoise_warmed: bool,
     /// Счётчик poll'ов (для периодической диагностики глубины кольца).
     poll_i: u64,
     /// Одноразовый лог первого кадра (диагностика старта цепочки отправки).
@@ -1704,6 +1709,8 @@ impl MicSource {
             encoder,
             stereo: Vec::with_capacity(MIC_FRAME_SAMPLES * 2),
             mono: Vec::with_capacity(MIC_FRAME_SAMPLES),
+            denoiser: nnnoiseless::DenoiseState::new(),
+            denoise_warmed: false,
             poll_i: 0,
             logged_first: false,
         })
@@ -1732,6 +1739,26 @@ impl FrameSource for MicSource {
                 self.poll_i
             );
         }
+
+        // RNNoise (nnnoiseless): вход/выход в масштабе i16 (±32768), а не ±1 —
+        // так требует документация модели. 960 сэмплов кадра = 2 прогона по 480.
+        // Первый выход — fade-in-артефакт нулевой истории: прогреваем состояние,
+        // но его не записываем.
+        let warm = self.denoise_warmed;
+        let mut dn_in = [0.0f32; nnnoiseless::DenoiseState::FRAME_SIZE];
+        let mut dn_out = [0.0f32; nnnoiseless::DenoiseState::FRAME_SIZE];
+        for chunk in self.mono.chunks_exact_mut(nnnoiseless::DenoiseState::FRAME_SIZE) {
+            for (d, s) in dn_in.iter_mut().zip(chunk.iter()) {
+                *d = s * 32768.0;
+            }
+            self.denoiser.process_frame(&mut dn_out, &dn_in);
+            if warm {
+                for (s, d) in chunk.iter_mut().zip(dn_out.iter()) {
+                    *s = d / 32768.0;
+                }
+            }
+        }
+        self.denoise_warmed = true;
 
         self.stereo.clear();
         for s in &self.mono {
