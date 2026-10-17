@@ -18,6 +18,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 bytes = "1"
 hex = "0.4"
 # opus = { version = "0.1", optional = true }  # требует libopus в системе — подключим на этапе звука
+opus = "0.1"
+cpal = "0.15"
 
 # Голосовой транспорт Discord: Voice Gateway v8 + DAVE (E2EE) + RTP + paced Opus.
 # Без DAVE Discord закрывает voice WS с кодом 4017 "E2EE/DAVE protocol required".

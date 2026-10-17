@@ -8,6 +8,10 @@ use tauri::{command, generate_context, generate_handler, AppHandle, Emitter, Man
 use tokio::io::AsyncReadExt;
 use tokio_tungstenite::tungstenite::Message;
 
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
 const API_BASE: &str = "https://discord.com/api/v10";
 const REDIRECT_URI: &str = "http://localhost:1436/callback";
 const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
@@ -1088,6 +1092,14 @@ async fn connect_voice(
         slot.pump_spawned = true;
         need
     };
+    // Канал входящих Opus-кадров (уже расшифрованных oto: user_id отфильтровано криптографически).
+    let (audio_tx, audio_rx) = tokio::sync::mpsc::channel(256);
+    tokio::spawn(async move {
+        if let Err(e) = play_audio_task(audio_rx).await {
+            log::warn!("Voice playback: {e}");
+        }
+    });
+
     if need_pump {
     let pump_app = app.clone();
     let pump_state = state.clone();
@@ -1173,12 +1185,115 @@ async fn connect_voice(
                     let _ = pump_app.emit("voice_status", json!({"status": "left"}));
                     break;
                 }
+                oto::ConnectionEvent::AudioReceived { user_id, ssrc, opus } => {
+                    // Кадр уже расшифрован oto (автор определён по ratchet'у отправителя).
+                    log::debug!("Voice (oto) audio from user {user_id} ssrc {ssrc} {} bytes", opus.len());
+                    let _ = audio_tx.send(opus).await;
+                }
                 _ => {}
             }
         }
         });
     } // need_pump
 
+    Ok(())
+}
+
+/// Воспроизведение входящего голоса: Opus-decode → общий микшер → cpal output.
+///
+/// カдр Opus: 20 мс, 48 кГц, стерео, float. Буфер общий для всех говорящих
+/// (простое смешивание достаточно для проверки слышимости).
+async fn play_audio_task(
+    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+) -> Result<(), String> {
+    let handle = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        play_audio_blocking(rx)
+    });
+    handle.await.map_err(|e| format!("join playback task: {e}"))?
+}
+
+/// Воспроизведение входящего голоса: Opus-decode → общий микшер → cpal output.
+/// Кадр Opus: 20 мс, 48 кГц, стерео, float. Буфер общий для всех говорящих.
+fn play_audio_blocking(
+    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+) -> Result<(), String> {
+    let mut decoder = opus::Decoder::new(48000, opus::Channels::Stereo)
+        .map_err(|e| format!("opus decoder: {e}"))?;
+
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .ok_or("нет выходного аудиоустройства")?;
+
+    let mut chosen = None;
+    'ranges: for range in device
+        .supported_output_configs()
+        .map_err(|e| e.to_string())?
+    {
+        if range.sample_format() == cpal::SampleFormat::F32 && range.channels() == 2 {
+            if range.min_sample_rate().0 <= 48000 && 48000 <= range.max_sample_rate().0 {
+                chosen = Some(range.with_sample_rate(cpal::SampleRate(48000)).config());
+                break 'ranges;
+            }
+        }
+    }
+    let config = chosen.unwrap_or_else(|| {
+        device
+            .default_output_config()
+            .ok()
+            .and_then(|d| Some(d.config()))
+            .expect("нет конфигурации выходного аудиоустройства")
+    });
+    if config.sample_rate.0 != 48000 || config.channels != 2 {
+        log::warn!(
+            "аудио-устройство не 48 кГц стерео: {:?} — будет ресемпл на стороне ОС",
+            config
+        );
+    }
+    let config: cpal::StreamConfig = config.into();
+
+    let out_buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let buf_clone = out_buf.clone();
+
+    let stream = device
+        .build_output_stream(
+            &config,
+            move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                let mut buf = buf_clone.lock().unwrap();
+                for sample in output.iter_mut() {
+                    *sample = buf.pop_front().unwrap_or(0.0).clamp(-1.0, 1.0);
+                }
+            },
+            move |err| log::warn!("cpal stream error: {err}"),
+            None,
+        )
+        .map_err(|e| format!("cpal open stream: {e}"))?;
+    stream.play().map_err(|e| format!("cpal play: {e}"))?;
+
+    let mut pcm = vec![0.0f32; 5760 * 2]; // максимум кадра Opus (120 мс) × 2 канала
+    while let Some(opus) = rx.blocking_recv() {
+        let len = match decoder.decode_float(&opus, &mut pcm, false) {
+            Ok(len) => len,
+            Err(e) => {
+                log::warn!("opus decode: {e}");
+                continue;
+            }
+        };
+        if len == 0 {
+            continue;
+        }
+        let mut buf = out_buf.lock().unwrap();
+        // стерео: len сэмплов на канал, чередование L/R
+        for ch in 0..2usize {
+            for i in 0..len {
+                buf.push_back(pcm[ch * len + i]);
+            }
+        }
+        // жёттер-буфер: не более ~2 сек вперёд
+        while buf.len() > 48000 * 2 * 2 {
+            buf.pop_front();
+        }
+    }
     Ok(())
 }
 
