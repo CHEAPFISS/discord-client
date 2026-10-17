@@ -942,7 +942,7 @@ async fn mic_stats_task(app: AppHandle) {
         let phase = format!("{:?}", snap.phase());
 
         if matches!(snap.phase(), oto::AudioPhase::Failed) {
-            if fails_in_a_row >= 5 {
+            if fails_in_a_row >= 3 {
                 continue; // устройство системно отвалилось — читаем лог, не молотим
             }
             fails_in_a_row += 1;
@@ -950,17 +950,37 @@ async fn mic_stats_task(app: AppHandle) {
                 "Микрофон/пасер: Failed (failure={:?}) — авто-восстановление, попытка {fails_in_a_row}",
                 snap.failure(),
             );
+            // Мягкий путь: заменить источник в живой задаче аудио.
             match MicSource::new() {
                 Ok(src) => match sender.replace_source(src).await {
-                    Ok(generation) => log::info!(
-                        "Микрофон/пасер: источник заменён (generation={}), отправка возобновится",
-                        generation.get()
-                    ),
-                    Err(e) => log::warn!("Микрофон/пасер: replace_source не удался: {e}"),
+                    Ok(generation) => {
+                        log::info!(
+                            "Микрофон/пасер: источник заменён (generation={}), отправка возобновится",
+                            generation.get()
+                        );
+                        continue;
+                    }
+                    // Жёсткий путь: задача аудио умерла (канал закрыт) — слот
+                    // audio_active freed, переattachиваем заново как при входе в канал.
+                    Err(e) => {
+                        log::warn!("Микрофон/пасер: replace_source не удался ({e}) — переattach");
+                        let state = app.state::<DiscordState>();
+                        state.mic_sender.lock().unwrap().take();
+                        let conn = state.voice_conn.lock().unwrap().conn.clone();
+                        match conn {
+                            Some(conn) => {
+                                tokio::spawn(attach_mic_task(app.clone(), conn));
+                            }
+                            None => log::warn!("Микрофон/пасер: живого соединения нет, переattach отменён"),
+                        }
+                        continue;
+                    }
                 },
-                Err(e) => log::warn!("Микрофон/пасер: устройство снова не открылось: {e}"),
+                Err(e) => {
+                    log::warn!("Микрофон/пасер: устройство снова не открылось: {e}");
+                    continue;
+                }
             }
-            continue;
         }
         if matches!(snap.phase(), oto::AudioPhase::Sending) {
             fails_in_a_row = 0;
