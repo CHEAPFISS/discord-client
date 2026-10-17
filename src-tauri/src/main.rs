@@ -1362,7 +1362,9 @@ async fn connect_voice(
         need
     };
     // Канал входящих Opus-кадров (уже расшифрованных oto: user_id отфильтровано криптографически).
-    let (audio_tx, audio_rx) = tokio::sync::mpsc::channel(256);
+    // user_id едет с кадром: у каждого участника — свой opus-декодер (общий
+    // кодек путал состояние и давал «булькание» при смене говорящих).
+    let (audio_tx, audio_rx) = tokio::sync::mpsc::channel::<(u64, Vec<u8>, u8)>(256);
     tokio::spawn(async move {
         if let Err(e) = play_audio_task(audio_rx).await {
             log::warn!("Voice playback: {e}");
@@ -1467,7 +1469,7 @@ async fn connect_voice(
                     let _ = pump_app.emit("voice_status", json!({"status": "left"}));
                     break;
                 }
-                oto::ConnectionEvent::AudioReceived { opus, missing, .. } => {
+                oto::ConnectionEvent::AudioReceived { user_id, opus, missing, .. } => {
                     // Кадр уже расшифрован oto (автор определён по ratchet'у
                     // отправителя). По-кадровых логов нет — до 100 кадров/с.
                     // Deafen: кадры не доигрываем вовсе (без расхода декодера).
@@ -1478,7 +1480,7 @@ async fn connect_voice(
                     {
                         continue;
                     }
-                    let _ = audio_tx.send((opus, missing as u8)).await;
+                    let _ = audio_tx.send((user_id, opus, missing as u8)).await;
                 }
                 oto::ConnectionEvent::DaveStateChanged { opcode, before, after, .. } => {
                     log::debug!("Voice (oto) DAVE control {opcode}: {before:?} → {after:?}");
@@ -1508,7 +1510,7 @@ async fn connect_voice(
 /// Воспроизведение входящего голоса: Opus-decode (с FEC-концеляцией потерь)
 /// → общий микшер → cpal output. Кадр: 20 мс, 48 кГц, стерео + счётчик пропусков.
 async fn play_audio_task(
-    rx: tokio::sync::mpsc::Receiver<(Vec<u8>, u8)>,
+    rx: tokio::sync::mpsc::Receiver<(u64, Vec<u8>, u8)>,
 ) -> Result<(), String> {
     let handle = tokio::task::spawn_blocking(move || -> Result<(), String> {
         play_audio_blocking(rx)
@@ -1519,10 +1521,16 @@ async fn play_audio_task(
 /// Воспроизведение входящего голоса: Opus-decode → общий микшер → cpal output.
 /// Кадр Opus: 20 мс, 48 кГц, стерео, float. Буфер общий для всех говорящих.
 fn play_audio_blocking(
-    mut rx: tokio::sync::mpsc::Receiver<(Vec<u8>, u8)>,
+    mut rx: tokio::sync::mpsc::Receiver<(u64, Vec<u8>, u8)>,
 ) -> Result<(), String> {
-    let mut decoder = opus::Decoder::new(48000, opus::Channels::Stereo)
-        .map_err(|e| format!("opus decoder: {e}"))?;
+    // Декодер на КАЖДОГО участника: libopus хранит PLC/фазовое состояние,
+    // общим кодеком кадры разных говорящих давали «булькание» при сменах.
+    let mut decoders: std::collections::HashMap<u64, opus::Decoder> =
+        std::collections::HashMap::new();
+    // Счётчики дрейфа часов: произведено/потреблено (см. отчёт раз в 10 с).
+    let produced = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let consumed = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let consumed_cb = consumed.clone();
 
     let host = cpal::default_host();
     let device = host
@@ -1576,7 +1584,10 @@ fn play_audio_blocking(
             {
                 let started = started.clone();
                 let underruns = underruns.clone();
+                let consumed_cb = consumed_cb.clone();
                 move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    consumed_cb
+                        .fetch_add(output.len() as u64, std::sync::atomic::Ordering::Relaxed);
                     let mut buf = buf_clone.lock().unwrap();
                     if buf.len() < PREBUFFER_SAMPLES
                         && !started.load(std::sync::atomic::Ordering::Relaxed)
@@ -1610,30 +1621,35 @@ fn play_audio_blocking(
 
     let mut pcm = vec![0.0f32; 5760 * 2]; // максимум кадра Opus (120 мс) × 2 канала
     let silent_slot = vec![0.0f32; 960 * 2]; // 20 мс стерео — для дыры без FEC
-    // Последний удачно декодированный пакет: источник FEC-восстановления
-    // для пропущенных кадров.
-    let mut last_packet: Vec<u8> = Vec::new();
-    // Раз в 10 с: глубина джиттер-очереди и счётчик underrun'ов (пустой
-    // очереди на тике вывода). Рост underruns = устройству не хватает данных
-    // (сеть/загрузка), «шум похлёбываний» в звучании.
+    // Раз в 10 с: глубина джиттер-очереди, underrun'ы и дрейф часов (окно):
+    // положительный drift = потребление обгоняет производство — буфер убывает.
     let mut last_report = std::time::Instant::now();
     let mut last_underruns: u64 = 0;
-    while let Some((opus, missing)) = rx.blocking_recv() {
-        // Скрытие потерь: на каждый пропущенный кадр — FEC-декод предыдущего
-        // пакета (libopus дорисовывает скрытый кадр по redundancy), иначе
-        // тишина того же размера. Вместо «дробления» — мягкая концеляция.
-        for _ in 0..missing {
-            if last_packet.is_empty() {
-                let mut buf = out_buf.lock().unwrap();
-                buf.extend(silent_slot.iter().copied());
-            } else if let Ok(len) = decoder.decode_float(&last_packet, &mut pcm, true) {
+    let mut last_cons: u64 = 0;
+    let mut last_prod: u64 = 0;
+    while let Some((user_id, opus, missing)) = rx.blocking_recv() {
+        // Скрытие потерь (семантика libopus): FEC-данные лежат в ТЕКУЩЕМ пакете
+        // и описывают ПОТЕРЯННЫЙ предыдущий. Один декод текущего пакета с
+        // fec=true вернёт восстановленный предыдущий кадр; более старые
+        // пропуски — тишина. (Раньше повторно декодировали старый пакет —
+        // дублировали ~20 мс и давали «пузыри» при missing≥2.)
+        let decoder = decoders.entry(user_id).or_insert_with(|| {
+            opus::Decoder::new(48000, opus::Channels::Stereo).expect("opus decoder per-user")
+        });
+        if missing > 0 {
+            let mut concealed: u8 = 0;
+            if let Ok(len) = decoder.decode_float(&opus, &mut pcm, true) {
                 if len > 0 {
                     let mut buf = out_buf.lock().unwrap();
                     buf.extend(&pcm[..len * 2]);
+                    concealed = 1;
                 }
-            } else {
+            }
+            if missing - concealed > 0 {
                 let mut buf = out_buf.lock().unwrap();
-                buf.extend(silent_slot.iter().copied());
+                for _ in 0..(missing - concealed) {
+                    buf.extend(silent_slot.iter().copied());
+                }
             }
         }
         let len = match decoder.decode_float(&opus, &mut pcm, false) {
@@ -1646,6 +1662,7 @@ fn play_audio_blocking(
         if len == 0 {
             continue;
         }
+        produced.fetch_add((len * 2) as u64, std::sync::atomic::Ordering::Relaxed);
         let mut buf = out_buf.lock().unwrap();
         // decode_float для стерео даёт interleaved [L,R,L,R…] — пушим как есть
         for i in 0..len * 2 {
@@ -1660,14 +1677,28 @@ fn play_audio_blocking(
             last_report = std::time::Instant::now();
             let depth_ms = out_buf.lock().unwrap().len() as f64 * 1000.0 / 48000.0 / 2.0;
             let und = underruns.load(std::sync::atomic::Ordering::Relaxed);
+            let cons = consumed.load(std::sync::atomic::Ordering::Relaxed);
+            let prod = produced.load(std::sync::atomic::Ordering::Relaxed);
+            let d_cons = cons.saturating_sub(last_cons);
+            let d_prod = prod.saturating_sub(last_prod);
+            last_cons = cons;
+            last_prod = prod;
+            let drift_ppm = if d_cons > 0 {
+                (d_cons as f64 - d_prod as f64) / d_cons as f64 * 1e6
+            } else {
+                0.0
+            };
             if und > last_underruns {
                 last_underruns = und;
-                log::info!("Playback: глубина {depth_ms:.0} мс, underrun {und}");
+                log::info!(
+                    "Playback: глубина {depth_ms:.0} мс, underrun {und}, drift {drift_ppm:+.0} ppm"
+                );
             } else {
-                log::debug!("Playback: глубина {depth_ms:.0} мс, underrun {und}");
+                log::debug!(
+                    "Playback: глубина {depth_ms:.0} мс, underrun {und}, drift {drift_ppm:+.0} ppm"
+                );
             }
         }
-        last_packet = opus;
     }
     Ok(())
 }
