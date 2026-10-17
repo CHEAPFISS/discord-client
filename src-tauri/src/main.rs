@@ -1614,24 +1614,15 @@ fn play_audio_blocking(
 /// своего следующего тика, пауза заполняется тишиной).
 struct MicSource {
     _stream: cpal::Stream,
-    ring: Arc<Mutex<VecDeque<f32>>>,
-    /// Waker пасера oto: контракт FrameSource требует будить задачу, когда
-    /// появились данные. До первого кадра пасер опрашивает источник только
-    /// по нотификации — без waker застрянет в WaitingForSource навсегда.
+    /// Готовые закодированные кадры, выкладываемые рабочим потоком (FIFO).
+    encoded: Arc<Mutex<VecDeque<Vec<u8>>>>,
+    /// Waker пасера oto: poll регистрирует себя, когда очередь пуста; рабочий
+    /// поток будит пасера после выкладки кадра (контракт FrameSource).
     waker: Arc<Mutex<Option<Waker>>>,
-    encoder: opus::Encoder,
-    stereo: Vec<f32>,
-    /// Моно-буфер кадра (переиспользуется — минус аллокация на каждый poll).
-    mono: Vec<f32>,
-    /// RNNoise (nnnoiseless): шумодав микрофона, как в Discord. 480 сэмплов
-    /// (10 мс @ 48 кГц) — 2 прогона на 20-мс кадр.
-    denoiser: Box<nnnoiseless::DenoiseState<'static>>,
-    /// Первый выход модели содержит fade-in — на первом кадре его не записываем.
-    denoise_warmed: bool,
-    /// Счётчик poll'ов (для периодической диагностики глубины кольца).
-    poll_i: u64,
-    /// Одноразовый лог первого кадра (диагностика старта цепочки отправки).
-    logged_first: bool,
+    /// Сигнальный condvar кольца: рабочий поток ждёт на нём сэмплы; Drop будит.
+    ring_cv: Arc<std::sync::Condvar>,
+    /// Флаг остановки рабочего потока (ставится в Drop).
+    stop_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
 const MIC_FRAME_SAMPLES: usize = 960; // 20 мс моно при 48 кГц
@@ -1663,37 +1654,134 @@ impl MicSource {
             .ok_or("нет подходящей конфигурации микрофона (f32, моно, 48 кГц)")?
             .config();
 
-        let mut encoder = opus::Encoder::new(48000, opus::Channels::Stereo, opus::CodingMode::Audio)
-            .map_err(|e| format!("opus encoder: {e}"))?;
-        // 64 kbps: естественный потолочный битрейт Discord-голоса; ниже нагрузка
-        // на CPU при кодировании (контракт poll: ≤2 мс, иначе oto роняет отправку).
-        encoder
-            .set_bitrate(64_000)
-            .map_err(|e| format!("opus set bitrate: {e}"))?;
         let ring: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let ring_cb = ring.clone();
+        let ring_cv = Arc::new(std::sync::Condvar::new());
+        let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let encoded: Arc<Mutex<VecDeque<Vec<u8>>>> = Arc::new(Mutex::new(VecDeque::new()));
         let waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
-        let waker_cb = waker.clone();
+
+        // Рабочий поток: вся тяжёлая работа (RNNoise + opus) — вне poll. Контракт
+        // FrameSource ограничивает poll двумя мс CPU на кадр; денойзер (пара
+        // прогонов по 480 сэмплов) вместе с кодированием туда не влезал — oto
+        // ронял отправку FrameSourceContract'ом каждые ~2 минуты. Теперь poll
+        // только отдаёт готовый кадр из очереди (микросекунды).
+        {
+            let ring = ring.clone();
+            let ring_cv = ring_cv.clone();
+            let stop_flag = stop_flag.clone();
+            let encoded = encoded.clone();
+            let waker = waker.clone();
+            std::thread::Builder::new()
+                .name("mic-encode".into())
+                .spawn(move || {
+                    let mut encoder =
+                        opus::Encoder::new(48000, opus::Channels::Stereo, opus::CodingMode::Audio)
+                            .expect("opus encoder");
+                    // 64 kbps: естественный потолочный битрейт Discord-голоса.
+                    encoder.set_bitrate(64_000).expect("opus bitrate");
+                    let mut denoiser = nnnoiseless::DenoiseState::new();
+                    // Первый выход модели — fade-in нулевой истории: прогреваем
+                    // состояние, но не пишем его в кадр.
+                    let mut denoise_warmed = false;
+                    let mut stereo = Vec::with_capacity(MIC_FRAME_SAMPLES * 2);
+                    let mut mono = Vec::with_capacity(MIC_FRAME_SAMPLES);
+                    let mut encoded_i: u64 = 0;
+
+                    'worker: loop {
+                        // 1) Собрать 20-мс кадр. Кольцо наполняет cpal-колбэк.
+                        let mut guard = ring.lock().unwrap();
+                        while guard.len() < MIC_FRAME_SAMPLES {
+                            if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                                break 'worker;
+                            }
+                            guard = ring_cv.wait(guard).unwrap();
+                        }
+                        mono.clear();
+                        mono.extend(guard.drain(..MIC_FRAME_SAMPLES));
+                        let ring_left = guard.len();
+                        drop(guard);
+
+                        encoded_i += 1;
+                        if encoded_i % 250 == 0 {
+                            log::debug!(
+                                "Микрофон: закодировано {encoded_i} кадров, в кольце {ring_left} сэмплов"
+                            );
+                        }
+
+                        // 2) RNNoise: вход/выход в масштабе i16 (±32768), а не ±1 —
+                        // так требует документация модели. 960 сэмплов = 2 прогона.
+                        let warm = denoise_warmed;
+                        let mut dn_in = [0.0f32; nnnoiseless::DenoiseState::FRAME_SIZE];
+                        let mut dn_out = [0.0f32; nnnoiseless::DenoiseState::FRAME_SIZE];
+                        for chunk in mono.chunks_exact_mut(nnnoiseless::DenoiseState::FRAME_SIZE) {
+                            for (d, s) in dn_in.iter_mut().zip(chunk.iter()) {
+                                *d = s * 32768.0;
+                            }
+                            denoiser.process_frame(&mut dn_out, &dn_in);
+                            if warm {
+                                for (s, d) in chunk.iter_mut().zip(dn_out.iter()) {
+                                    *s = d / 32768.0;
+                                }
+                            }
+                        }
+                        denoise_warmed = true;
+
+                        // 3) opus 64 kbps stereo (дублируем моно в L/R, как раньше).
+                        stereo.clear();
+                        for s in &mono {
+                            stereo.push(*s);
+                            stereo.push(*s);
+                        }
+                        let mut enc = [0u8; 4096];
+                        let len = match encoder.encode_float(&stereo, &mut enc) {
+                            Ok(l) => l,
+                            Err(e) => {
+                                log::warn!("opus encode mic: {e}");
+                                continue;
+                            }
+                        };
+                        if len == 0 {
+                            continue;
+                        }
+
+                        // 4) Выложить кадр: кап ~160 мс (8 кадров). Старейшие
+                        // дропаются — для голоса свежесть важнее полноты.
+                        {
+                            let mut queue = encoded.lock().unwrap();
+                            while queue.len() >= 8 {
+                                queue.pop_front();
+                            }
+                            queue.push_back(enc[..len].to_vec());
+                        }
+                        if encoded_i == 1 {
+                            log::info!("Микрофон: первый кадр {len} байт уходит в oto");
+                        }
+                        let wake = waker.lock().unwrap().take();
+                        if let Some(w) = wake {
+                            w.wake();
+                        }
+                    }
+                })
+                .map_err(|e| format!("поток кодирования микрофона: {e}"))?;
+        }
 
         let stream = device
             .build_input_stream(
                 &config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    let mut ring = ring_cb.lock().unwrap();
-                    for &s in data {
-                        ring.push_back(s);
-                        while ring.len() > MIC_RING_MAX {
-                            ring.pop_front();
+                {
+                    let ring_cb = ring.clone();
+                    let ring_cv_cb = ring_cv.clone();
+                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        let mut ring = ring_cb.lock().unwrap();
+                        for &s in data {
+                            ring.push_back(s);
+                            while ring.len() > MIC_RING_MAX {
+                                ring.pop_front();
+                            }
                         }
-                    }
-                    let enough = ring.len() >= MIC_FRAME_SAMPLES;
-                    drop(ring);
-                    // Появился целый 20-мс кадр — будим пасер oto (контракт FrameSource).
-                    if enough {
-                        let wake = waker_cb.lock().unwrap().take();
-                        if let Some(w) = wake {
-                            w.wake();
-                        }
+                        // Будим рабочий поток — он сам решит, накопился ли кадр,
+                        // и затем разбудит пасер oto (контракт FrameSource).
+                        ring_cv_cb.notify_all();
                     }
                 },
                 move |err| log::warn!("cpal input stream error: {err}"),
@@ -1704,90 +1792,45 @@ impl MicSource {
 
         Ok(Self {
             _stream: stream,
-            ring,
+            encoded,
             waker,
-            encoder,
-            stereo: Vec::with_capacity(MIC_FRAME_SAMPLES * 2),
-            mono: Vec::with_capacity(MIC_FRAME_SAMPLES),
-            denoiser: nnnoiseless::DenoiseState::new(),
-            denoise_warmed: false,
-            poll_i: 0,
-            logged_first: false,
+            ring_cv,
+            stop_flag,
         })
+    }
+}
+
+impl Drop for MicSource {
+    fn drop(&mut self) {
+        // Рабочий поток ждёт на condvar кольца; будим его, чтобы он увидел
+        // флаг остановки и корректно завершился.
+        self.stop_flag
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.ring_cv.notify_all();
     }
 }
 
 impl FrameSource for MicSource {
     fn poll_frame(&mut self, cx: &mut Context<'_>, output: &mut [u8]) -> Poll<FrameStatus> {
-        let mut ring = self.ring.lock().unwrap();
-        if ring.len() < MIC_FRAME_SAMPLES {
-            // Регистрируем (и заменяем) waker: будим, когда накопится целый кадр.
-            *self.waker.lock().unwrap() = Some(cx.waker().clone());
-            return Poll::Pending;
-        }
-        self.mono.clear();
-        self.mono.extend(ring.drain(..MIC_FRAME_SAMPLES));
-        drop(ring);
-
-        // Диагностика задержки: глубина кольца после потребления кадра.
-        // Каждые ~2 сек: если растёт —(clock-drift/поздние тики), если ~константа — ок.
-        self.poll_i += 1;
-        if self.poll_i % 100 == 0 {
-            let left = self.ring.lock().unwrap().len();
-            log::debug!(
-                "Микрофон: poll№{} кадр забран, осталось в кольце {left} сэмплов",
-                self.poll_i
-            );
-        }
-
-        // RNNoise (nnnoiseless): вход/выход в масштабе i16 (±32768), а не ±1 —
-        // так требует документация модели. 960 сэмплов кадра = 2 прогона по 480.
-        // Первый выход — fade-in-артефакт нулевой истории: прогреваем состояние,
-        // но его не записываем.
-        let warm = self.denoise_warmed;
-        let mut dn_in = [0.0f32; nnnoiseless::DenoiseState::FRAME_SIZE];
-        let mut dn_out = [0.0f32; nnnoiseless::DenoiseState::FRAME_SIZE];
-        for chunk in self.mono.chunks_exact_mut(nnnoiseless::DenoiseState::FRAME_SIZE) {
-            for (d, s) in dn_in.iter_mut().zip(chunk.iter()) {
-                *d = s * 32768.0;
+        let mut queue = self.encoded.lock().unwrap();
+        while let Some(frame) = queue.pop_front() {
+            let len = frame.len();
+            if len < 3 || len > output.len() {
+                // Дефектный кадр не должен случаться, но не уроним отправку из-за него.
+                continue;
             }
-            self.denoiser.process_frame(&mut dn_out, &dn_in);
-            if warm {
-                for (s, d) in chunk.iter_mut().zip(dn_out.iter()) {
-                    *s = d / 32768.0;
-                }
-            }
+            output[..len].copy_from_slice(&frame[..len]);
+            return Poll::Ready(FrameStatus::Frame { len });
         }
-        self.denoise_warmed = true;
-
-        self.stereo.clear();
-        for s in &self.mono {
-            self.stereo.push(*s);
-            self.stereo.push(*s);
-        }
-
-        let mut encoded = [0u8; 4096];
-        let len = match self.encoder.encode_float(&self.stereo, &mut encoded) {
-            Ok(l) => l,
-            Err(e) => {
-                log::warn!("opus encode mic: {e}");
-                return Poll::Pending;
-            }
-        };
-        if len == 0 || len > output.len() {
-            return Poll::Pending;
-        }
-        output[..len].copy_from_slice(&encoded[..len]);
-        if !self.logged_first {
-            self.logged_first = true;
-            log::info!("Микрофон: первый кадр {} байт уходит в oto", len);
-        }
-        Poll::Ready(FrameStatus::Frame { len })
+        // Очередь пуста: регистрируем waker — рабочий поток будит после выкладки.
+        *self.waker.lock().unwrap() = Some(cx.waker().clone());
+        Poll::Pending
     }
 }
 
-// Микрофон трогает Opus-энкодер только из poll_frame (один выделенный поток oto);
-// кольцевая буфер и cpal-поток потокобезопасны — Send безопасен вручную.
+// Микрофон: cpal::Stream не Send, остальные поля — Arc с полной внутренней
+// синхронизацией (Mutex/AtomicBool/Condvar). Кадры кодирует один отдельный
+// поток; poll трогает только очередь и waker — Send безопасен вручную.
 unsafe impl Send for MicSource {}
 
 // --- Точка входа ---
