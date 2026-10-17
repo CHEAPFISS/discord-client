@@ -11,6 +11,9 @@ use tokio_tungstenite::tungstenite::Message;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
+
+use oto::{FrameSource, FrameStatus};
 
 const API_BASE: &str = "https://discord.com/api/v10";
 const REDIRECT_URI: &str = "http://localhost:1436/callback";
@@ -844,6 +847,12 @@ async fn leave_voice_channel(
         slot.pump_spawned = false;
         conn
     };
+    // Микрофон: graceful-тишина, затем отключаем отправителя (после этого слот пуст).
+    // take() на отдельной строке: временный MutexGuard не должен пересекать await.
+    let mic_sender = state.mic_sender.lock().unwrap().take();
+    if let Some(sender) = mic_sender {
+        let _ = sender.stop().await;
+    }
     state.voice_rejoin.store(0, std::sync::atomic::Ordering::SeqCst);
     if let Some(conn) = active_conn {
         let _ = conn.shutdown().await;
@@ -861,6 +870,20 @@ async fn leave_voice_channel(
         sender.send(op4).await.ok();
     }
     let _ = app.emit("voice_status", json!({"status": "left"}));
+    Ok(())
+}
+
+/// Микрофон вкл/выкл (graceful pause отправителя в oto — соединение не рвём).
+#[command]
+async fn set_self_mute(state: State<'_, DiscordState>, muted: bool) -> Result<(), String> {
+    let sender = state.mic_sender.lock().unwrap().clone();
+    let Some(sender) = sender else {
+        return Ok(()); // не в голосовом канале
+    };
+    sender
+        .set_paused(muted)
+        .await
+        .map_err(|e| format!("mute: {e}"))?;
     Ok(())
 }
 
@@ -915,6 +938,7 @@ fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
         voice_conn: state.voice_conn.clone(),
         voice_connect_lock: state.voice_connect_lock.clone(),
         voice_rejoin: state.voice_rejoin.clone(),
+        mic_sender: state.mic_sender.clone(),
     }
 }
 
@@ -1084,6 +1108,21 @@ async fn connect_voice(
     state.voice_conn.lock().unwrap().conn = Some(conn.clone());
     let _ = app.emit("voice_status", json!({"status": "connected"}));
 
+    // Микрофон: кодируемapture в Opus и подаём в oto (oto сам подождёт
+    // готовности соединения, если фаза ещё не Connected).
+    if state.mic_sender.lock().unwrap().is_none() {
+        match MicSource::new() {
+            Ok(mic) => match conn.start_audio(mic).await {
+                Ok(sender) => {
+                    state.mic_sender.lock().unwrap().replace(sender);
+                    log::info!("Микрофон подключён к голосовому каналу");
+                }
+                Err(e) => log::warn!("Не удалось начать отправку аудио: {e}"),
+            },
+            Err(e) => log::warn!("Микрофон недоступен (голос без микрофона): {e}"),
+        }
+    }
+
     // Насос событий: ОДИН на соединение. Повторные replace_voice_info обслуживает
     // уже живущий насос — иначе плодим подписчиков (лимит oto: 8) и дублируем события.
     let need_pump = {
@@ -1204,7 +1243,7 @@ async fn connect_voice(
 /// カдр Opus: 20 мс, 48 кГц, стерео, float. Буфер общий для всех говорящих
 /// (простое смешивание достаточно для проверки слышимости).
 async fn play_audio_task(
-    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
 ) -> Result<(), String> {
     let handle = tokio::task::spawn_blocking(move || -> Result<(), String> {
         play_audio_blocking(rx)
@@ -1297,6 +1336,109 @@ fn play_audio_blocking(
     Ok(())
 }
 
+/// Микрофон: cpal-capture → кольцевая буфер → Opus-кадр 20 мс / 48 кГц.
+/// poll_frame не спит и не блокирует: недостатке данных — Pending (oto подождёт
+/// своего следующего тика, пауза заполняется тишиной).
+struct MicSource {
+    _stream: cpal::Stream,
+    ring: Arc<Mutex<VecDeque<f32>>>,
+    encoder: opus::Encoder,
+    stereo: Vec<f32>,
+}
+
+const MIC_FRAME_SAMPLES: usize = 960; // 20 мс моно при 48 кГц
+const MIC_RING_MAX: usize = 48000 * 4; // ~4 сек аудио в кольце
+
+impl MicSource {
+    fn new() -> Result<Self, String> {
+        let host = cpal::default_host();
+        let device = host
+            .default_input_device()
+            .ok_or("нет входного аудиоустройства (микрофон)")?;
+
+        let mut chosen = None;
+        'cfg: for range in device
+            .supported_input_configs()
+            .map_err(|e| e.to_string())?
+        {
+            if range.sample_format() == cpal::SampleFormat::F32 && range.channels() == 1 {
+                if range.min_sample_rate().0 <= 48000 && 48000 <= range.max_sample_rate().0 {
+                    chosen = Some(range.with_sample_rate(cpal::SampleRate(48000)));
+                    break 'cfg;
+                }
+            }
+        }
+        let config = chosen
+            .ok_or("нет подходящей конфигурации микрофона (f32, моно, 48 кГц)")?
+            .config();
+
+        let encoder = opus::Encoder::new(48000, opus::Channels::Stereo, opus::CodingMode::Audio)
+            .map_err(|e| format!("opus encoder: {e}"))?;
+        let ring: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let ring_cb = ring.clone();
+
+        let stream = device
+            .build_input_stream(
+                &config,
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    let mut ring = ring_cb.lock().unwrap();
+                    for &s in data {
+                        ring.push_back(s);
+                        while ring.len() > MIC_RING_MAX {
+                            ring.pop_front();
+                        }
+                    }
+                },
+                move |err| log::warn!("cpal input stream error: {err}"),
+                None,
+            )
+            .map_err(|e| format!("cpal open input stream: {e}"))?;
+        stream.play().map_err(|e| format!("cpal input play: {e}"))?;
+
+        Ok(Self {
+            _stream: stream,
+            ring,
+            encoder,
+            stereo: Vec::with_capacity(MIC_FRAME_SAMPLES * 2),
+        })
+    }
+}
+
+impl FrameSource for MicSource {
+    fn poll_frame(&mut self, _cx: &mut Context<'_>, output: &mut [u8]) -> Poll<FrameStatus> {
+        let mut ring = self.ring.lock().unwrap();
+        if ring.len() < MIC_FRAME_SAMPLES {
+            return Poll::Pending;
+        }
+        let mono: Vec<f32> = ring.drain(..MIC_FRAME_SAMPLES).collect();
+        drop(ring);
+
+        self.stereo.clear();
+        for s in &mono {
+            self.stereo.push(*s);
+            self.stereo.push(*s);
+        }
+
+        let mut encoded = [0u8; 4096];
+        let len = match self.encoder.encode_float(&self.stereo, &mut encoded) {
+            Ok(l) => l,
+            Err(e) => {
+                log::warn!("opus encode mic: {e}");
+                return Poll::Pending;
+            }
+        };
+        if len == 0 || len > output.len() {
+            return Poll::Pending;
+        }
+        output[..len].copy_from_slice(&encoded[..len]);
+        Poll::Ready(FrameStatus::Frame { len })
+    }
+}
+
+// Микрофон трогает Opus-энкодер только из poll_frame (один выделенный поток oto);
+// кольцевая буфер и cpal-поток потокобезопасны — Send безопасен вручную.
+unsafe impl Send for MicSource {}
+
 // --- Точка входа ---
 
 fn main() {
@@ -1327,7 +1469,8 @@ fn main() {
             send_message,
             connect_gateway,
             join_voice_channel,
-            leave_voice_channel
+            leave_voice_channel,
+            set_self_mute
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

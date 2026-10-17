@@ -325,8 +325,9 @@ function setStatus(text) {
 let micMuted = false;
 let deafened = false;
 
-document.getElementById('micBtn').onclick = () => {
+document.getElementById('micBtn').onclick = async () => {
   micMuted = !micMuted;
+  try { await invoke('set_self_mute', { muted: micMuted }); } catch (_) {}
   const btn = document.getElementById('micBtn');
   btn.classList.toggle('active', micMuted);
   btn.title = micMuted ? 'Микрофон заглушён' : 'Микрофон';

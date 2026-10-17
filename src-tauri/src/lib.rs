@@ -53,6 +53,8 @@ pub struct DiscordState {
     pub voice_connect_lock: Arc<tokio::sync::Mutex<()>>,
     /// Счётчик авто-переподключений (re-join) после 4014/4022 NeedsFreshVoiceInfo.
     pub voice_rejoin: Arc<AtomicU64>,
+    /// Отправитель микрофонного аудио в oto (None вне голоса).
+    pub mic_sender: Arc<Mutex<Option<oto::PacedAudioSender>>>,
 }
 
 /// Цель подключения к голосовому каналу + собранные данные авторизации.
@@ -81,6 +83,7 @@ impl Default for DiscordState {
             voice_conn: Arc::new(Mutex::new(VoiceSlot::default())),
             voice_connect_lock: Arc::new(tokio::sync::Mutex::new(())),
             voice_rejoin: Arc::new(AtomicU64::new(0)),
+            mic_sender: Arc::new(Mutex::new(None)),
         }
     }
 }
