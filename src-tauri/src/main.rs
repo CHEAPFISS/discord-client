@@ -1365,10 +1365,10 @@ async fn connect_voice(
                     let _ = pump_app.emit("voice_status", json!({"status": "left"}));
                     break;
                 }
-                oto::ConnectionEvent::AudioReceived { user_id, ssrc, opus } => {
+                oto::ConnectionEvent::AudioReceived { user_id, ssrc, opus, missing } => {
                     // Кадр уже расшифрован oto (автор определён по ratchet'у отправителя).
-                    log::debug!("Voice (oto) audio from user {user_id} ssrc {ssrc} {} bytes", opus.len());
-                    let _ = audio_tx.send(opus).await;
+                    log::debug!("Voice (oto) audio from user {user_id} ssrc {ssrc} {} bytes missing {missing}", opus.len());
+                    let _ = audio_tx.send((opus, missing as u8)).await;
                 }
                 oto::ConnectionEvent::DaveStateChanged { opcode, before, after, .. } => {
                     log::debug!("Voice (oto) DAVE control {opcode}: {before:?} → {after:?}");
@@ -1395,12 +1395,10 @@ async fn connect_voice(
     Ok(())
 }
 
-/// Воспроизведение входящего голоса: Opus-decode → общий микшер → cpal output.
-///
-/// カдр Opus: 20 мс, 48 кГц, стерео, float. Буфер общий для всех говорящих
-/// (простое смешивание достаточно для проверки слышимости).
+/// Воспроизведение входящего голоса: Opus-decode (с FEC-концеляцией потерь)
+/// → общий микшер → cpal output. Кадр: 20 мс, 48 кГц, стерео + счётчик пропусков.
 async fn play_audio_task(
-    rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    rx: tokio::sync::mpsc::Receiver<(Vec<u8>, u8)>,
 ) -> Result<(), String> {
     let handle = tokio::task::spawn_blocking(move || -> Result<(), String> {
         play_audio_blocking(rx)
@@ -1411,7 +1409,7 @@ async fn play_audio_task(
 /// Воспроизведение входящего голоса: Opus-decode → общий микшер → cpal output.
 /// Кадр Opus: 20 мс, 48 кГц, стерео, float. Буфер общий для всех говорящих.
 fn play_audio_blocking(
-    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    mut rx: tokio::sync::mpsc::Receiver<(Vec<u8>, u8)>,
 ) -> Result<(), String> {
     let mut decoder = opus::Decoder::new(48000, opus::Channels::Stereo)
         .map_err(|e| format!("opus decoder: {e}"))?;
@@ -1478,7 +1476,28 @@ fn play_audio_blocking(
     stream.play().map_err(|e| format!("cpal play: {e}"))?;
 
     let mut pcm = vec![0.0f32; 5760 * 2]; // максимум кадра Opus (120 мс) × 2 канала
-    while let Some(opus) = rx.blocking_recv() {
+    let silent_slot = vec![0.0f32; 960 * 2]; // 20 мс стерео — для дыры без FEC
+    // Последний удачно декодированный пакет: источник FEC-восстановления
+    // для пропущенных кадров.
+    let mut last_packet: Vec<u8> = Vec::new();
+    while let Some((opus, missing)) = rx.blocking_recv() {
+        // Скрытие потерь: на каждый пропущенный кадр — FEC-декод предыдущего
+        // пакета (libopus дорисовывает скрытый кадр по redundancy), иначе
+        // тишина того же размера. Вместо «дробления» — мягкая концеляция.
+        for _ in 0..missing {
+            if last_packet.is_empty() {
+                let mut buf = out_buf.lock().unwrap();
+                buf.extend(silent_slot.iter().copied());
+            } else if let Ok(len) = decoder.decode_float(&last_packet, &mut pcm, true) {
+                if len > 0 {
+                    let mut buf = out_buf.lock().unwrap();
+                    buf.extend(&pcm[..len * 2]);
+                }
+            } else {
+                let mut buf = out_buf.lock().unwrap();
+                buf.extend(silent_slot.iter().copied());
+            }
+        }
         let len = match decoder.decode_float(&opus, &mut pcm, false) {
             Ok(len) => len,
             Err(e) => {
@@ -1498,6 +1517,8 @@ fn play_audio_blocking(
         while buf.len() > 48000 * 2 * 2 {
             buf.pop_front();
         }
+        drop(buf);
+        last_packet = opus;
     }
     Ok(())
 }
