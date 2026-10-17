@@ -918,6 +918,47 @@ async fn attach_mic_task(app: AppHandle, conn: oto::VoiceConnection) {
     }
 }
 
+/// Монитор микрофона/пасера: oto сам не логирует фазы отправки. Раз в 5 сек
+/// снимаем снапшот: фазу (при смене) и счётчики (когдаSending — тревога).
+/// Позволяет увидеть, где пасер оказался после «внезапного» обрыва.
+async fn mic_stats_task(app: AppHandle) {
+    let mut last_phase: Option<String> = None;
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let sender = {
+            let state = app.state::<DiscordState>();
+            let guard = state.mic_sender.lock().unwrap();
+            guard.clone()
+        };
+        let Some(sender) = sender else {
+            continue;
+        };
+        let snap = sender.state();
+        let stats = snap.stats();
+        let phase = format!("{:?}", snap.phase());
+        if last_phase.as_deref() != Some(phase.as_str()) {
+            log::info!(
+                "Микрофон/пасер фаза: {} (frames={} silence={} unavailable={})",
+                phase,
+                stats.frames_sent(),
+                stats.silence_frames_sent(),
+                stats.frames_unavailable(),
+            );
+            last_phase = Some(phase.clone());
+        }
+        if !matches!(snap.phase(), oto::AudioPhase::Sending) {
+            log::warn!(
+                "Микрофон/пасер не отправляет: фаза {} unavailable={} skipped={} failures={} overruns={}",
+                phase,
+                stats.frames_unavailable(),
+                stats.skipped_deadlines(),
+                stats.send_failures(),
+                stats.source_overruns(),
+            );
+        }
+    }
+}
+
 /// Голосовое подключение к серверу Discord:
 /// Voice WebSocket (identify → READY с ssrc) → UDP (IP Discovery → Select Protocol → Heartbeat).
 /// Повторный op 4 join текущего канала: Discord выдаст свежую пару (session, token).
@@ -1262,6 +1303,22 @@ async fn connect_voice(
                     log::debug!("Voice (oto) audio from user {user_id} ssrc {ssrc} {} bytes", opus.len());
                     let _ = audio_tx.send(opus).await;
                 }
+                oto::ConnectionEvent::DaveStateChanged { opcode, before, after, .. } => {
+                    log::debug!("Voice (oto) DAVE control {opcode}: {before:?} → {after:?}");
+                }
+                oto::ConnectionEvent::DaveWaitingForMembers { timeout_seconds, .. } => {
+                    log::info!("Voice (oto) DAVE: ждёт участников (таймаут {timeout_seconds}s), отправка недоступна");
+                }
+                oto::ConnectionEvent::DaveRecovery { attempt, .. } => {
+                    log::info!("Voice (oto) DAVE: recovery, попытка {attempt}");
+                }
+                oto::ConnectionEvent::DaveControlProcessed {
+                    opcode, transition_id, epoch, ..
+                } => {
+                    log::debug!(
+                        "Voice (oto) DAVE control processed: op={opcode} tid={transition_id:?} epoch={epoch:?}"
+                    );
+                }
                 _ => {}
             }
         }
@@ -1537,6 +1594,8 @@ fn main() {
                     window.open_devtools();
                 }
             }
+            // Монитор состояния отправки микрофона (диагностика «пропадания звука»).
+            tokio::spawn(mic_stats_task(app.handle().clone()));
             Ok(())
         })
         .run(generate_context!())
