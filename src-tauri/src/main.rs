@@ -1451,11 +1451,22 @@ fn play_audio_blocking(
     let out_buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
     let buf_clone = out_buf.clone();
 
+    // Де-джиттер: пока в кольце меньше ~96 мс звук — отдаём тишину и копим
+    // запас. Без этого соседние пакеты (всплески задержки сети) истощали
+    // буфер мгновенно и получались «дробления».
+    const PREBUFFER_SAMPLES: usize = 48000 * 2 * 96 / 1000; // 48к × 2 канала × 96 мс
+
     let stream = device
         .build_output_stream(
             &config,
             move |output: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 let mut buf = buf_clone.lock().unwrap();
+                if buf.len() < PREBUFFER_SAMPLES {
+                    for sample in output.iter_mut() {
+                        *sample = 0.0;
+                    }
+                    return;
+                }
                 for sample in output.iter_mut() {
                     *sample = buf.pop_front().unwrap_or(0.0).clamp(-1.0, 1.0);
                 }
