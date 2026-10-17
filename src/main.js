@@ -401,7 +401,6 @@ if (listen) {
     }
   });
   listen('voice_channel_ready', (event) => {
-    console.log('Голосовое подключение собрано:', event.payload);
     setStatus('Голос: данные собраны, подключаюсь к голосовому серверу…');
   });
 }

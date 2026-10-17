@@ -16,12 +16,22 @@ const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
 
 /// Защита от повторного запуска: только одно соединение за раз.
 static GATEWAY_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Служебный payload для rx-канала gateway: «остановись окончательно» (смена аккаунта).
+const GATEWAY_RELOG_MARKER: &str = "__relog__";
 
 #[command]
 async fn connect_gateway(
     app: AppHandle,
     state: State<'_, DiscordState>,
     sender: State<'_, GatewaySender>,
+) -> Result<String, String> {
+    start_gateway_inner(app, clone_state(&state), &sender).await
+}
+
+async fn start_gateway_inner(
+    app: AppHandle,
+    state: DiscordState,
+    sender: &GatewaySender,
 ) -> Result<String, String> {
     use std::sync::atomic::Ordering;
 
@@ -42,6 +52,53 @@ async fn connect_gateway(
     Ok("started".into())
 }
 
+/// Смена идентичности: гасим голос (oto) и голосовой стейт под старым аккаунтом.
+async fn reset_voice_on_identity_change(app: &AppHandle, state: &DiscordState) {
+    let conn = {
+        let mut slot = state.voice_conn.lock().unwrap();
+        let conn = slot.conn.take();
+        slot.session_id = None;
+        slot.token = None;
+        slot.pump_spawned = false;
+        conn
+    };
+    state
+        .voice_rejoin
+        .store(0, std::sync::atomic::Ordering::SeqCst);
+    *state.voice.lock().unwrap() = None;
+    if let Some(conn) = conn {
+        let _ = conn.shutdown().await;
+    }
+    let _ = app.emit("voice_status", json!({"status": "left"}));
+}
+
+/// Перезапуск gateway-цикла под НОВЫМ токеном: маркер старому loop'у → ожидание → старт.
+async fn restart_gateway_for_new_token(
+    app: &AppHandle,
+    state: &DiscordState,
+    sender: &GatewaySender,
+) {
+    // 1) просим активный loop выйти
+    let marker = json!({"internal": GATEWAY_RELOG_MARKER});
+    let _ = sender.send(marker).await;
+    // 2) ждём его остановки (до ~5с; loop проверяет маркер в rx-ветке select-а)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while GATEWAY_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+        && std::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    // 3) заводим новый gateway с текущей (новой) сессией
+    let app2 = app.clone();
+    let state2 = state.clone();
+    // sender: GatewaySender не Clone — живём через app.state::<GatewaySender>()
+    tokio::spawn(async move {
+        let app3 = app2.clone();
+        let sender2 = app3.state::<GatewaySender>();
+        let _ = start_gateway_inner(app2, state2, sender2.inner()).await;
+    });
+}
+
 /// Бесконечный цикл соединения с ретраями.
 async fn gateway_loop(
     app: AppHandle,
@@ -50,6 +107,10 @@ async fn gateway_loop(
 ) -> Result<(), String> {
     loop {
         match gateway_once(&app, &token, &mut rx).await {
+            Ok(true) => {
+                log::info!("Gateway: окончательная остановка (релогин)");
+                return Ok(());
+            }
             Ok(_) => {
                 log::info!("Gateway: закрыто штатно, переподключение через 3с");
             }
@@ -65,11 +126,12 @@ async fn gateway_loop(
     }
 }
 
+/// true = остановиться окончательно (маркер релогина), false/Err = обычный reconnect-цикл.
 async fn gateway_once(
     app: &AppHandle,
     token: &str,
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     
     let (ws, _) = tokio_tungstenite::connect_async(GATEWAY_URL)
         .await
@@ -115,7 +177,7 @@ async fn gateway_once(
 
     let _ = app.emit("gateway_status", json!({"status": "connected"}));
     log::info!("Gateway: подключен, heartbeat {heartbeat_ms}мс");
-    log::info!("Identify отправлен (tok={:.4}…)", &token[..4.min(token.len())]);
+    log::info!("Identify отправлен");
 
     // 3) heartbeat + приём событий
     let mut hb = tokio::time::interval(std::time::Duration::from_millis(heartbeat_ms));
@@ -132,6 +194,10 @@ async fn gateway_once(
             out = rx.recv() => {
                 match out {
                     Some(payload) => {
+                        if payload.get("internal").and_then(|v| v.as_str()) == Some(GATEWAY_RELOG_MARKER) {
+                            log::info!("Gateway: маркер релогина — останавливаю цикл");
+                            return Ok(true);
+                        }
                         if write.send(Message::Text(payload.to_string())).await.is_err() {
                             return Err("outgoing send failed".into());
                         }
@@ -237,11 +303,11 @@ async fn handle_voice_server(app: &AppHandle, d: &serde_json::Value) {
                 voice.endpoint = Some(endpoint.trim_start_matches("wss://").to_string());
             }
             if voice.session_id.is_some() && voice.token.is_some() && voice.endpoint.is_some() {
+                // Токен в webview не отдаём: фронт подключение не выполняет.
                 let payload = json!({
                     "guild_id": voice.guild_id,
                     "channel_id": voice.channel_id,
                     "session_id": voice.session_id,
-                    "token": voice.token,
                     "endpoint": voice.endpoint,
                 });
                 log::info!(
@@ -374,14 +440,24 @@ fn get_me(state: State<'_, DiscordState>) -> Result<serde_json::Value, String> {
 }
 
 #[command]
-fn logout(state: State<'_, DiscordState>) -> Result<(), String> {
+async fn logout(
+    app: AppHandle,
+    state: State<'_, DiscordState>,
+    sender: State<'_, GatewaySender>,
+) -> Result<(), String> {
+    let st = clone_state(&state);
+    reset_voice_on_identity_change(&app, &st).await;
+    // останавливаем gateway-цикл (новый стартует после следующего логина)
+    let _ = sender.send(json!({"internal": GATEWAY_RELOG_MARKER})).await;
     state.set_session(None)
 }
 
 /// Вход по user-токену Discord (полноценный доступ к REST API).
 #[command]
 async fn login_with_token(
+    app: AppHandle,
     state: State<'_, DiscordState>,
+    sender: State<'_, GatewaySender>,
     token: String,
 ) -> Result<serde_json::Value, String> {
     let token = token.trim().trim_matches('"').to_string();
@@ -414,6 +490,11 @@ async fn login_with_token(
         username: resp["username"].as_str().unwrap_or("").to_string(),
     };
     state.set_session(Some(session.clone()))?;
+
+    // Смена идентичности: гасим голос и перезапускаем gateway под новым токеном.
+    let st = clone_state(&state);
+    reset_voice_on_identity_change(&app, &st).await;
+    restart_gateway_for_new_token(&app, &st, &sender).await;
 
     Ok(serde_json::json!({
         "user_id": session.user_id,
@@ -646,19 +727,23 @@ async fn leave_voice_channel(
     state: State<'_, DiscordState>,
     sender: State<'_, GatewaySender>,
 ) -> Result<(), String> {
+    // Сериализация с in-flight connect: иначе коннект успеет "воскресить" голос после выхода.
+    let _guard = state.voice_connect_lock.lock().await;
     let guild_id = {
         let mut voice = state.voice.lock().unwrap();
         let guild = voice.as_ref().map(|v| v.guild_id.clone());
         *voice = None;
         guild
     };
-    // закрываем oto-соединение, если активно
-    let active_conn = state.voice_conn.lock().unwrap().conn.take();
-    {
+    // Единая секция: conn + пара + флаг насоса согласованно, без окна между локами.
+    let active_conn = {
         let mut slot = state.voice_conn.lock().unwrap();
+        let conn = slot.conn.take();
         slot.session_id = None;
         slot.token = None;
-    }
+        slot.pump_spawned = false;
+        conn
+    };
     state.voice_rejoin.store(0, std::sync::atomic::Ordering::SeqCst);
     if let Some(conn) = active_conn {
         let _ = conn.shutdown().await;
@@ -778,6 +863,23 @@ async fn connect_voice(
     let channel = channel_ids.parse::<u64>().map_err(|e| format!("channel_id: {e}"))?;
     let endpoint = endpoint_in.trim().trim_start_matches("wss://").to_string();
 
+    // Цель могла смениться/сняться, пока задача стояла в очереди (leave, новый join,
+    // смена аккаунта): неактуальная попытка не тратит одноразовый токен и не воскрешает голос.
+    {
+        let voice = state.voice.lock().unwrap();
+        match voice.as_ref() {
+            None => {
+                log::info!("Voice connect отменён: цель снята (leave/смена аккаунта)");
+                return Ok(());
+            }
+            Some(v) if v.channel_id != channel_ids => {
+                log::info!("Voice connect отменён: цель сменилась на канал {}", v.channel_id);
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
     let _guard = state.voice_connect_lock.lock().await;
 
     // Дедуп: пара (session, token) уже применена к не-терминальному соединению.
@@ -828,6 +930,9 @@ async fn connect_voice(
                     oto::ConnectionPhase::Failed | oto::ConnectionPhase::Closed
                 )
             });
+        if !alive {
+            slot.pump_spawned = false; // мёртвое/новое соединение — насос заводим заново
+        }
         (prev, alive)
     };
 
@@ -894,9 +999,17 @@ async fn connect_voice(
     state.voice_conn.lock().unwrap().conn = Some(conn.clone());
     let _ = app.emit("voice_status", json!({"status": "connected"}));
 
-    // Насос событий: работает ТОЛЬКО по актуальному соединению в слоте (generation).
-    // Двойных насосов можно не бояться — события чужих поколений отфильтрованы здесь.
+    // Насос событий: ОДИН на соединение. Повторные replace_voice_info обслуживает
+    // уже живущий насос — иначе плодим подписчиков (лимит oto: 8) и дублируем события.
+    let need_pump = {
+        let mut slot = state.voice_conn.lock().unwrap();
+        let need = !slot.pump_spawned;
+        slot.pump_spawned = true;
+        need
+    };
+    if need_pump {
     let pump_app = app.clone();
+    let pump_state = state.clone();
     let slot_ref = state.voice_conn.clone();
     let mut sub = conn
         .subscribe_events()
@@ -905,6 +1018,11 @@ async fn connect_voice(
         loop {
             let event = match sub.recv().await {
                 Ok(ev) => ev,
+                Err(oto::EventReceiveError::Lagged { skipped }) => {
+                    // Переполнение кольца — не смертельно, продолжаем с новыми.
+                    log::warn!("Voice (oto) насос отстал: пропущено {skipped} событий");
+                    continue;
+                }
                 Err(_) => break,
             };
             // Актуальное состояние слота на момент прихода события.
@@ -958,9 +1076,10 @@ async fn connect_voice(
                         f.safe_code(),
                         f.retry_disposition()
                     );
-                    // NeedsFreshVoiceInfo — регулярный случай смены канала:
-                    // авто-rejoin уже работает, мигание ошибкой в UI не нужно.
+                    // NeedsFreshVoiceInfo mid-session: соединение ждёт свежую пару —
+                    // сами запрашиваем re-join (op 4), иначе голос висит навсегда.
                     if matches!(f.retry_disposition(), oto::RetryDisposition::NeedsFreshVoiceInfo) {
+                        request_voice_rejoin(&pump_app, &pump_state);
                         let _ = pump_app.emit("voice_status", json!({"status": "joining"}));
                     } else {
                         let _ = pump_app.emit(
@@ -976,7 +1095,8 @@ async fn connect_voice(
                 _ => {}
             }
         }
-    });
+        });
+    } // need_pump
 
     Ok(())
 }

@@ -39,16 +39,19 @@ pub struct VoiceSlot {
     pub conn: Option<ActiveVoiceConnection>,
     pub session_id: Option<String>,
     pub token: Option<String>,
+    /// Насос событий уже заспавнен для текущего соединения (один, не на каждый connect).
+    pub pump_spawned: bool,
 }
 
 impl Default for VoiceSlot {
     fn default() -> Self {
-        Self { conn: None, session_id: None, token: None }
+        Self { conn: None, session_id: None, token: None, pump_spawned: false }
     }
 }
 
 // --- Состояние приложения ---
 
+#[derive(Clone)]
 pub struct DiscordState {
     pub session: Arc<Mutex<Option<DiscordSession>>>,
     /// Данные голосового подключения (session_id/token/endpoint приходят асинхронно).
@@ -182,19 +185,49 @@ fn session_path() -> PathBuf {
 }
 
 fn load_session_from_disk() -> Option<DiscordSession> {
-    let text = fs::read_to_string(session_path()).ok()?;
+    let path = session_path();
+    let text = fs::read_to_string(&path).ok()?;
+    // Файл мог остаться от старой версии с 0644 — зажимаем права до 0600.
+    #[cfg(unix)]
+    if let Ok(meta) = fs::metadata(&path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode();
+        if mode & 0o777 != 0o600 {
+            let mut perms = meta.permissions();
+            perms.set_mode((mode & !0o777) | 0o600);
+            let _ = fs::set_permissions(&path, perms);
+        }
+    }
     serde_json::from_str(&text).ok()
 }
 
 fn save_session_to_disk(state: &DiscordState) -> Result<(), String> {
+    use std::io::Write;
     let guard = state.session.lock().unwrap();
+    let path = session_path();
     match guard.as_ref() {
         Some(session) => {
             let json = serde_json::to_string_pretty(session).map_err(|e| e.to_string())?;
-            fs::write(session_path(), json).map_err(|e| e.to_string())
+            // Пишем ONLY 0600: в файле plaintext user-токен полного доступа к аккаунту.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&path)
+                    .map_err(|e| e.to_string())?;
+                file.write_all(json.as_bytes()).map_err(|e| e.to_string())
+            }
+            #[cfg(not(unix))]
+            {
+                fs::write(&path, json).map_err(|e| e.to_string())
+            }
         }
         None => {
-            let _ = fs::remove_file(session_path());
+            let _ = fs::remove_file(&path);
             Ok(())
         }
     }
