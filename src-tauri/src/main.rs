@@ -1518,14 +1518,24 @@ async fn play_audio_task(
     handle.await.map_err(|e| format!("join playback task: {e}"))?
 }
 
-/// Воспроизведение входящего голоса: Opus-decode → общий микшер → cpal output.
-/// Кадр Opus: 20 мс, 48 кГц, стерео, float. Буфер общий для всех говорящих.
+/// Воспроизведение входящего голоса: Opus-decode (per-user) → МИКШЕР → cpal output.
+/// Кадр Opus: 20 мс, 48 кГц, стерео, float.
+///
+/// Микшер: каждый участник — своя очередь 20-мс секторов («pending»); в общий
+/// буфер попадает ПОСЕКТОРНАЯ сумма участников (молчащий = нули). Раньше
+/// кадры игрались последовательно: двое говорили одновременно → два таймлайна
+/// в одной очереди (40 мс речи на 20 мс времени) → очередь раздувалась и
+/// «лагало». Сектора остаются выровненными, т.к. SFU двигает тишину (DTX)
+/// для каждого sender'а с той же частотой 50 кадров/с.
 fn play_audio_blocking(
     mut rx: tokio::sync::mpsc::Receiver<(u64, Vec<u8>, u8)>,
 ) -> Result<(), String> {
     // Декодер на КАЖДОГО участника: libopus хранит PLC/фазовое состояние,
     // общим кодеком кадры разных говорящих давали «булькание» при сменах.
     let mut decoders: std::collections::HashMap<u64, opus::Decoder> =
+        std::collections::HashMap::new();
+    // Очередь 20-мс секторов каждого участника для покадрового микширования.
+    let mut pending: std::collections::HashMap<u64, std::collections::VecDeque<Vec<f32>>> =
         std::collections::HashMap::new();
     // Счётчики дрейфа часов: произведено/потреблено (см. отчёт раз в 10 с).
     let produced = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -1662,17 +1672,44 @@ fn play_audio_blocking(
         if len == 0 {
             continue;
         }
-        produced.fetch_add((len * 2) as u64, std::sync::atomic::Ordering::Relaxed);
-        let mut buf = out_buf.lock().unwrap();
-        // decode_float для стерео даёт interleaved [L,R,L,R…] — пушим как есть
-        for i in 0..len * 2 {
-            buf.push_back(pcm[i]);
+        // Сектор участника — в его очередь (кап ~1.2 с на всплеск: не съедает
+        // память, миксер выровняет).
+        let chunk = pcm[..len * 2].to_vec();
+        {
+            let q = pending
+                .entry(user_id)
+                .or_insert_with(std::collections::VecDeque::new);
+            q.push_back(chunk);
+            while q.len() > 60 {
+                q.pop_front();
+            }
         }
-        // жёттер-буфер: не более ~2 сек вперёд
-        while buf.len() > 48000 * 2 * 2 {
-            buf.pop_front();
+
+        // МИКШЕР: слить готовые сектора участников в общий таймлайн. Берём
+        // по максимальному заполнению: у кого нет своего сектора — в этом
+        // слоте нули (DTX-SFU держит счётчики секторов синхронными); ушедшие
+        // (пустая очередь) миксер не блокируют.
+        loop {
+            if !pending.values().any(|q| !q.is_empty()) {
+                break;
+            }
+            let mut slot = vec![0.0f32; 960 * 2];
+            for q in pending.values_mut() {
+                if let Some(chunk) = q.pop_front() {
+                    for (acc, s) in slot.iter_mut().zip(chunk.iter()) {
+                        *acc += *s;
+                    }
+                }
+            }
+            produced.fetch_add(slot.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            let mut buf = out_buf.lock().unwrap();
+            buf.extend(slot);
+            // жёттер-буфер: не более ~2 сек вперёд
+            while buf.len() > 48000 * 2 * 2 {
+                buf.pop_front();
+            }
+            drop(buf);
         }
-        drop(buf);
         if last_report.elapsed() >= std::time::Duration::from_secs(10) {
             last_report = std::time::Instant::now();
             let depth_ms = out_buf.lock().unwrap().len() as f64 * 1000.0 / 48000.0 / 2.0;
