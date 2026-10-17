@@ -21,7 +21,8 @@ hex = "0.4"
 
 # Голосовой транспорт Discord: Voice Gateway v8 + DAVE (E2EE) + RTP + paced Opus.
 # Без DAVE Discord закрывает voice WS с кодом 4017 "E2EE/DAVE protocol required".
-oto = { git = "https://github.com/rayan6ms/oto", tag = "v1.0.0" }
+# Форк (v1.0.0 + диагностика DAVE/приём аудио) вендорен локально: ../vendor/oto
+oto = { path = "../vendor/oto/crates/oto" }
 
 # Нативная WebRTC библиотека — подключим после выбора конкретной реализации
 #пример: webrtc = { version = "0.9", features = ["audio", "video"] }

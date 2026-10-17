@@ -11,3 +11,6 @@ cache/
 coverage/
 /target/
 target/
+# Локальный форк oto (nested repo, не коммитится целый):
+# branch local-fix = fix/announced-mls-transitions + диагностика davey
+vendor/
