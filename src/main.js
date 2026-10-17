@@ -401,22 +401,8 @@ if (listen) {
     }
   });
   listen('voice_channel_ready', (event) => {
-    const d = event.payload || {};
-    console.log('Голосовое подключение собрано:', d);
-    setStatus('Голос: авторизация пройдена, UDP-подключение…');
-    // Передаём данные в бэкенд для подключения к голосовому UDP-серверу
-    if (d.session_id && d.token && d.endpoint) {
-      invoke('voice_udp_connect', {
-        sessionId: d.session_id,
-        token: d.token,
-        endpoint: d.endpoint,
-        guildId: d.guild_id,
-        channelId: d.channel_id,
-      }).catch(e => {
-        console.error('voice_udp_connect ошибка:', e);
-        setStatus('Ошибка UDP: ' + e);
-      });
-    }
+    console.log('Голосовое подключение собрано:', event.payload);
+    setStatus('Голос: данные собраны, подключаюсь к голосовому серверу…');
   });
 }
 
