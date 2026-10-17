@@ -11,7 +11,7 @@ use tokio_tungstenite::tungstenite::Message;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 
 use oto::{FrameSource, FrameStatus};
 
@@ -887,6 +887,37 @@ async fn set_self_mute(state: State<'_, DiscordState>, muted: bool) -> Result<()
     Ok(())
 }
 
+/// Подключение микрофона к живому соединению. Ото требует готовой DAVE-группы
+/// на момент attach (ошибка DaveRequired, сам не ретраит) — поэтому ретраим:
+/// в свежем канале ExecuteTransition приходит через ~сотню мс после коннекта.
+async fn attach_mic_task(app: AppHandle, conn: oto::VoiceConnection) {
+    let state = app.state::<DiscordState>();
+    for attempt in 0..8u32 {
+        if state.mic_sender.lock().unwrap().is_some() {
+            return; // уже подключён (живой pacer пережил replace_voice_info)
+        }
+        match MicSource::new() {
+            Ok(mic) => match conn.start_audio(mic).await {
+                Ok(sender) => {
+                    state.mic_sender.lock().unwrap().replace(sender);
+                    log::info!("Микрофон подключён к голосовому каналу");
+                    return;
+                }
+                Err(e) => {
+                    if attempt == 7 {
+                        log::warn!("Не удалось начать отправку аудио: {e}");
+                    }
+                }
+            },
+            Err(e) => {
+                log::warn!("Микрофон недоступен (голос без микрофона): {e}");
+                return;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    }
+}
+
 /// Голосовое подключение к серверу Discord:
 /// Voice WebSocket (identify → READY с ssrc) → UDP (IP Discovery → Select Protocol → Heartbeat).
 /// Повторный op 4 join текущего канала: Discord выдаст свежую пару (session, token).
@@ -1070,6 +1101,8 @@ async fn connect_voice(
         }
         Some(p) => {
             // Мёртвое соединение — закрываем и подключаемся начисто.
+            // Старый sender принадлежал мёртвому конну — сбрасываем.
+            state.mic_sender.lock().unwrap().take();
             let _ = p.shutdown().await;
             let oto = oto::Oto::builder().build().map_err(|e| format!("oto init: {e}"))?;
             match oto.connect(info).await {
@@ -1085,6 +1118,8 @@ async fn connect_voice(
             }
         }
         None => {
+            // Начисто: прежнего соединения не было — слот микрофона тоже пуст.
+            state.mic_sender.lock().unwrap().take();
             let oto = oto::Oto::builder().build().map_err(|e| format!("oto init: {e}"))?;
             match oto.connect(info).await {
                 Ok(c) => c,
@@ -1108,21 +1143,6 @@ async fn connect_voice(
     state.voice_conn.lock().unwrap().conn = Some(conn.clone());
     let _ = app.emit("voice_status", json!({"status": "connected"}));
 
-    // Микрофон: кодируемapture в Opus и подаём в oto (oto сам подождёт
-    // готовности соединения, если фаза ещё не Connected).
-    if state.mic_sender.lock().unwrap().is_none() {
-        match MicSource::new() {
-            Ok(mic) => match conn.start_audio(mic).await {
-                Ok(sender) => {
-                    state.mic_sender.lock().unwrap().replace(sender);
-                    log::info!("Микрофон подключён к голосовому каналу");
-                }
-                Err(e) => log::warn!("Не удалось начать отправку аудио: {e}"),
-            },
-            Err(e) => log::warn!("Микрофон недоступен (голос без микрофона): {e}"),
-        }
-    }
-
     // Насос событий: ОДИН на соединение. Повторные replace_voice_info обслуживает
     // уже живущий насос — иначе плодим подписчиков (лимит oto: 8) и дублируем события.
     let need_pump = {
@@ -1143,6 +1163,11 @@ async fn connect_voice(
     let pump_app = app.clone();
     let pump_state = state.clone();
     let slot_ref = state.voice_conn.clone();
+    // Микрофон: подключаем (с ретраями до готовности DAVE); при replace-пути
+    // sender уже жив в pacer — attach_mic_task это увидит и завершится сразу.
+    if state.mic_sender.lock().unwrap().is_none() {
+        tokio::spawn(attach_mic_task(app.clone(), conn.clone()));
+    }
     let mut sub = conn
         .subscribe_events()
         .map_err(|e| format!("oto subscribe: {e}"))?;
@@ -1185,6 +1210,14 @@ async fn connect_voice(
             match event {
                 oto::ConnectionEvent::StateChanged { phase, .. } => {
                     log::debug!("Voice (oto) phase: {phase:?}");
+                    if phase == oto::ConnectionPhase::Connected {
+                        // Фаза Connected — DAVE-группа готова: attaching микрофона
+                        // (идемпотентно; если attach уже идёт — он сам выйдет).
+                        let attach = slot_ref.lock().unwrap().conn.clone();
+                        if let Some(c) = attach {
+                            tokio::spawn(attach_mic_task(pump_app.clone(), c));
+                        }
+                    }
                     let (status, err) = match phase {
                         oto::ConnectionPhase::Connected => ("connected", None),
                         oto::ConnectionPhase::Resuming
@@ -1342,8 +1375,14 @@ fn play_audio_blocking(
 struct MicSource {
     _stream: cpal::Stream,
     ring: Arc<Mutex<VecDeque<f32>>>,
+    /// Waker пасера oto: контракт FrameSource требует будить задачу, когда
+    /// появились данные. До первого кадра пасер опрашивает источник только
+    /// по нотификации — без waker застрянет в WaitingForSource навсегда.
+    waker: Arc<Mutex<Option<Waker>>>,
     encoder: opus::Encoder,
     stereo: Vec<f32>,
+    /// Одноразовый лог первого кадра (диагностика старта цепочки отправки).
+    logged_first: bool,
 }
 
 const MIC_FRAME_SAMPLES: usize = 960; // 20 мс моно при 48 кГц
@@ -1376,6 +1415,8 @@ impl MicSource {
             .map_err(|e| format!("opus encoder: {e}"))?;
         let ring: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
         let ring_cb = ring.clone();
+        let waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
+        let waker_cb = waker.clone();
 
         let stream = device
             .build_input_stream(
@@ -1388,6 +1429,15 @@ impl MicSource {
                             ring.pop_front();
                         }
                     }
+                    let enough = ring.len() >= MIC_FRAME_SAMPLES;
+                    drop(ring);
+                    // Появился целый 20-мс кадр — будим пасер oto (контракт FrameSource).
+                    if enough {
+                        let wake = waker_cb.lock().unwrap().take();
+                        if let Some(w) = wake {
+                            w.wake();
+                        }
+                    }
                 },
                 move |err| log::warn!("cpal input stream error: {err}"),
                 None,
@@ -1398,16 +1448,20 @@ impl MicSource {
         Ok(Self {
             _stream: stream,
             ring,
+            waker,
             encoder,
             stereo: Vec::with_capacity(MIC_FRAME_SAMPLES * 2),
+            logged_first: false,
         })
     }
 }
 
 impl FrameSource for MicSource {
-    fn poll_frame(&mut self, _cx: &mut Context<'_>, output: &mut [u8]) -> Poll<FrameStatus> {
+    fn poll_frame(&mut self, cx: &mut Context<'_>, output: &mut [u8]) -> Poll<FrameStatus> {
         let mut ring = self.ring.lock().unwrap();
         if ring.len() < MIC_FRAME_SAMPLES {
+            // Регистрируем (и заменяем) waker: будим, когда накопится целый кадр.
+            *self.waker.lock().unwrap() = Some(cx.waker().clone());
             return Poll::Pending;
         }
         let mono: Vec<f32> = ring.drain(..MIC_FRAME_SAMPLES).collect();
@@ -1431,6 +1485,10 @@ impl FrameSource for MicSource {
             return Poll::Pending;
         }
         output[..len].copy_from_slice(&encoded[..len]);
+        if !self.logged_first {
+            self.logged_first = true;
+            log::info!("Микрофон: первый кадр {} байт уходит в oto", len);
+        }
         Poll::Ready(FrameStatus::Frame { len })
     }
 }
