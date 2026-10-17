@@ -1536,6 +1536,10 @@ struct UserPlayback {
     samples: std::collections::VecDeque<f32>,
     /// Свой prebuffer: поток участника начинает играть после накопления.
     started: bool,
+    /// Диагностика: всего залито в очередь (enqueue) / всего сыграно (колбэк),
+    /// в сэмплах. Расхождение за окно = лаг или дублирование.
+    enq_total: u64,
+    played_total: u64,
 }
 fn play_audio_blocking(
     mut rx: tokio::sync::mpsc::Receiver<(u64, Vec<u8>, u8)>,
@@ -1628,6 +1632,7 @@ fn play_audio_blocking(
                         let take = output.len().min(up.samples.len());
                         if take > 0 {
                             played_any = true;
+                            up.played_total += take as u64;
                             for (o, s) in output.iter_mut().zip(up.samples.drain(0..take)) {
                                 *o += s;
                             }
@@ -1661,8 +1666,11 @@ fn play_audio_blocking(
             .or_insert_with(|| UserPlayback {
                 samples: std::collections::VecDeque::new(),
                 started: false,
+                enq_total: 0,
+                played_total: 0,
             });
         up.samples.extend(samples.iter().copied());
+        up.enq_total += samples.len() as u64;
         while up.samples.len() > 48000 * 2 * 2 {
             up.samples.pop_front();
         }
@@ -1671,9 +1679,11 @@ fn play_audio_blocking(
     // Раз в 10 с: глубина джиттер-очереди, underrun'ы и дрейф часов (окно):
     // положительный drift = потребление обгоняет производство — буфер убывает.
     let mut last_report = std::time::Instant::now();
-    let mut last_underruns: u64 = 0;
     let mut last_cons: u64 = 0;
     let mut last_prod: u64 = 0;
+    // Снапшот per-user счётчиков для приростов в отчёте (окно 10 с).
+    let mut last_per_user: std::collections::HashMap<u64, (u64, u64)> =
+        std::collections::HashMap::new();
     while let Some((user_id, opus, missing)) = rx.blocking_recv() {
         // Скрытие потерь (семантика libopus): FEC-данные лежат в ТЕКУЩЕМ пакете
         // и описывают ПОТЕРЯННЫЙ предыдущий. Один декод текущего пакета с
@@ -1712,11 +1722,6 @@ fn play_audio_blocking(
         enqueue(user_id, &pcm[..len * 2]);
         if last_report.elapsed() >= std::time::Duration::from_secs(10) {
             last_report = std::time::Instant::now();
-            let (depth_ms, users_no) = {
-                let users = out_map.lock().unwrap();
-                let max_len = users.values().map(|up| up.samples.len()).max().unwrap_or(0);
-                (max_len as f64 * 1000.0 / 48000.0 / 2.0, users.len())
-            };
             let und = underruns.load(std::sync::atomic::Ordering::Relaxed);
             let cons = consumed.load(std::sync::atomic::Ordering::Relaxed);
             let prod = produced.load(std::sync::atomic::Ordering::Relaxed);
@@ -1729,15 +1734,36 @@ fn play_audio_blocking(
             } else {
                 0.0
             };
-            if und > last_underruns {
-                last_underruns = und;
-                log::info!(
-                    "Playback: глубина {depth_ms:.0} мс (участников {users_no}), underrun {und}, drift {drift_ppm:+.0} ppm"
-                );
-            } else {
+            // Per-user диагностика микса: глубина, приток/плий за окно.
+            // Расхождение притока и плея = лаг или дубли (см. «жуть»-репродукцию).
+            {
+                let users = out_map.lock().unwrap();
+                let mut line = String::from("Mix |");
+                for (uid, up) in users.iter() {
+                    let (le, lp) = last_per_user.get(uid).copied().unwrap_or((0, 0));
+                    let denq = up.enq_total.saturating_sub(le) as f64 / 10.0 / 1000.0;
+                    let dplay = up.played_total.saturating_sub(lp) as f64 / 10.0 / 1000.0;
+                    last_per_user.insert(*uid, (up.enq_total, up.played_total));
+                    let depth = up.samples.len() as f64 * 1000.0 / 48000.0 / 2.0;
+                    line.push_str(&format!(
+                        " {:.0}мс {:>5.1}/{:>5.1}к{} ({uid}) |",
+                        depth,
+                        denq,
+                        dplay,
+                        if up.started { "▶" } else { "…" }
+                    ));
+                }
+                if users.is_empty() {
+                    line.push_str(" тишина");
+                }
+                let max_ms = users
+                    .values()
+                    .map(|up| up.samples.len() as f64 * 1000.0 / 48000.0 / 2.0)
+                    .fold(0.0f64, f64::max);
                 log::debug!(
-                    "Playback: глубина {depth_ms:.0} мс (участников {users_no}), underrun {und}, drift {drift_ppm:+.0} ppm"
+                    "Playback: глубина {max_ms:.0} мс, underrun {und}, drift {drift_ppm:+.0} ppm"
                 );
+                log::debug!("{line}");
             }
         }
     }
