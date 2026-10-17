@@ -772,11 +772,19 @@ async fn connect_voice(
 
     let _guard = state.voice_connect_lock.lock().await;
 
-    // Дедуп: эта сессия уже подключена (эхо VOICE_STATE_UPDATE / повторный invoke).
+    // Дедуп: пропускаем ТОЛЬКО если сессия совпадает и соединение реально живо (Connected).
+    // Мёртвые (Failed/Closed/Reconnecting с протухшей сессией) — уничтожаются ниже и
+    // заменяются свежим подключением, иначе получается «вечно подключаюсь…».
     {
         let slot = state.voice_conn.lock().unwrap();
-        if slot.session_id.as_deref() == Some(session_id.as_str()) && slot.conn.is_some() {
+        let alive = slot
+            .conn
+            .as_ref()
+            .map(|c| c.state().phase() == oto::ConnectionPhase::Connected)
+            .unwrap_or(false);
+        if alive && slot.session_id.as_deref() == Some(session_id.as_str()) {
             log::debug!("Voice: session уже подключена, дедуп-пропуск");
+            let _ = app.emit("voice_status", json!({"status": "connected"}));
             return Ok(());
         }
     }
