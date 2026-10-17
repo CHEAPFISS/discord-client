@@ -923,8 +923,12 @@ async fn attach_mic_task(app: AppHandle, conn: oto::VoiceConnection) {
 /// Позволяет увидеть, где пасер оказался после «внезапного» обрыва.
 async fn mic_stats_task(app: AppHandle) {
     let mut last_phase: Option<String> = None;
+    // Терминальный Failed (обычно контракт poll: >2 мс CPU у кадра). Каждую
+    // секунду пробуем replace_source новым MicSource: oto продолжит ту же
+    // сессию — это заменяет ручной перезаход, который делал пользователь.
+    let mut fails_in_a_row: u32 = 0;
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         let sender = {
             let state = app.state::<DiscordState>();
             let guard = state.mic_sender.lock().unwrap();
@@ -936,6 +940,32 @@ async fn mic_stats_task(app: AppHandle) {
         let snap = sender.state();
         let stats = snap.stats();
         let phase = format!("{:?}", snap.phase());
+
+        if matches!(snap.phase(), oto::AudioPhase::Failed) {
+            if fails_in_a_row >= 5 {
+                continue; // устройство системно отвалилось — читаем лог, не молотим
+            }
+            fails_in_a_row += 1;
+            log::warn!(
+                "Микрофон/пасер: Failed (failure={:?}) — авто-восстановление, попытка {fails_in_a_row}",
+                snap.failure(),
+            );
+            match MicSource::new() {
+                Ok(src) => match sender.replace_source(src).await {
+                    Ok(generation) => log::info!(
+                        "Микрофон/пасер: источник заменён (generation={}), отправка возобновится",
+                        generation.get()
+                    ),
+                    Err(e) => log::warn!("Микрофон/пасер: replace_source не удался: {e}"),
+                },
+                Err(e) => log::warn!("Микрофон/пасер: устройство снова не открылось: {e}"),
+            }
+            continue;
+        }
+        if matches!(snap.phase(), oto::AudioPhase::Sending) {
+            fails_in_a_row = 0;
+        }
+
         if last_phase.as_deref() != Some(phase.as_str()) {
             log::info!(
                 "Микрофон/пасер фаза: {} (frames={} silence={} unavailable={})",
@@ -1436,6 +1466,8 @@ struct MicSource {
     waker: Arc<Mutex<Option<Waker>>>,
     encoder: opus::Encoder,
     stereo: Vec<f32>,
+    /// Моно-буфер кадра (переиспользуется — минус аллокация на каждый poll).
+    mono: Vec<f32>,
     /// Одноразовый лог первого кадра (диагностика старта цепочки отправки).
     logged_first: bool,
 }
@@ -1469,8 +1501,13 @@ impl MicSource {
             .ok_or("нет подходящей конфигурации микрофона (f32, моно, 48 кГц)")?
             .config();
 
-        let encoder = opus::Encoder::new(48000, opus::Channels::Stereo, opus::CodingMode::Audio)
+        let mut encoder = opus::Encoder::new(48000, opus::Channels::Stereo, opus::CodingMode::Audio)
             .map_err(|e| format!("opus encoder: {e}"))?;
+        // 64 kbps: естественный потолочный битрейт Discord-голоса; ниже нагрузка
+        // на CPU при кодировании (контракт poll: ≤2 мс, иначе oto роняет отправку).
+        encoder
+            .set_bitrate(64_000)
+            .map_err(|e| format!("opus set bitrate: {e}"))?;
         let ring: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
         let ring_cb = ring.clone();
         let waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
@@ -1509,6 +1546,7 @@ impl MicSource {
             waker,
             encoder,
             stereo: Vec::with_capacity(MIC_FRAME_SAMPLES * 2),
+            mono: Vec::with_capacity(MIC_FRAME_SAMPLES),
             logged_first: false,
         })
     }
@@ -1522,11 +1560,12 @@ impl FrameSource for MicSource {
             *self.waker.lock().unwrap() = Some(cx.waker().clone());
             return Poll::Pending;
         }
-        let mono: Vec<f32> = ring.drain(..MIC_FRAME_SAMPLES).collect();
+        self.mono.clear();
+        self.mono.extend(ring.drain(..MIC_FRAME_SAMPLES));
         drop(ring);
 
         self.stereo.clear();
-        for s in &mono {
+        for s in &self.mono {
             self.stereo.push(*s);
             self.stereo.push(*s);
         }
