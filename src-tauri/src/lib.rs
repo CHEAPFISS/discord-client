@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Отправитель сообщений Gateway (op 4, heartbeat и т.д.) — bridges команды к ws-задаче.
 pub struct GatewaySender {
@@ -20,12 +20,23 @@ impl GatewaySender {
     }
 }
 
+/// Метаданные активного голосового UDP-соединения (сам сокет живёт в spawned задаче).
+#[derive(Debug, Clone, Default)]
+pub struct VoiceConnectionMeta {
+    pub secret_key: Option<Vec<u8>>,
+    pub ssrc: Option<u32>,
+    pub mode: Option<String>,
+    pub connected: bool,
+}
+
 // --- Состояние приложения ---
 
 pub struct DiscordState {
-    pub session: Mutex<Option<DiscordSession>>,
-    /// Данные активного голосового подключения (session_id/token/endpoint приходят асинхронно).
-    pub voice: Mutex<Option<VoiceData>>,
+    pub session: Arc<Mutex<Option<DiscordSession>>>,
+    /// Данные голосового подключения (session_id/token/endpoint приходят асинхронно).
+    pub voice: Arc<Mutex<Option<VoiceData>>>,
+    /// Метрики голосового UDP-соединения (secret_key, ssrc и т.д.).
+    pub voice_conn: Arc<Mutex<VoiceConnectionMeta>>,
 }
 
 /// Цель подключения к голосовому каналу + собранные данные авторизации.
@@ -49,8 +60,9 @@ pub struct DiscordSession {
 impl Default for DiscordState {
     fn default() -> Self {
         Self {
-            session: Mutex::new(None),
-            voice: Mutex::new(None),
+            session: Arc::new(Mutex::new(None)),
+            voice: Arc::new(Mutex::new(None)),
+            voice_conn: Arc::new(Mutex::new(VoiceConnectionMeta::default())),
         }
     }
 }

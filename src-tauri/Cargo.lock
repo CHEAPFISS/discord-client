@@ -679,8 +679,10 @@ dependencies = [
 name = "discord-client"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "env_logger",
  "futures-util",
+ "hex",
  "log",
  "reqwest 0.11.27",
  "rustls",

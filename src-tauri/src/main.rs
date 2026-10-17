@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tauri::{command, generate_context, generate_handler, AppHandle, Emitter, Manager, State};
 use tokio::io::AsyncReadExt;
+use tokio::net::UdpSocket;
 
 const API_BASE: &str = "https://discord.com/api/v10";
 const REDIRECT_URI: &str = "http://localhost:1436/callback";
@@ -641,6 +642,13 @@ async fn leave_voice_channel(
         *voice = None;
         guild
     };
+    // сбрасываем флаг соединения, чтобы цикл heartbeat в UDP-задаче прервался
+    {
+        let mut conn = state.voice_conn.lock().unwrap();
+        conn.connected = false;
+        conn.secret_key = None;
+        conn.ssrc = None;
+    }
     if let Some(guild_id) = guild_id {
         let op4 = json!({
             "op": 4,
@@ -654,6 +662,171 @@ async fn leave_voice_channel(
         sender.send(op4).await.ok();
     }
     let _ = app.emit("voice_status", json!({"status": "left"}));
+    Ok(())
+}
+
+/// Запрос на голосовое UDP-подключение (приходит после voice_channel_ready из Gateway).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceUdpConnectRequest {
+    pub session_id: String,
+    pub token: String,
+    pub endpoint: String,
+    pub guild_id: String,
+    pub channel_id: String,
+}
+
+/// Голосовое UDP-подключение к серверу Discord:
+/// IP Discovery → Select Protocol → Voice Heartbeat → (Opus RTP — следующий этап).
+#[command]
+async fn voice_udp_connect(
+    app: AppHandle,
+    state: State<'_, DiscordState>,
+    session_id: String,
+    token: String,
+    endpoint: String,
+    guild_id: String,
+    channel_id: String,
+) -> Result<(), String> {
+    log::info!(
+        "Voice UDP connect: guild={} channel={} endpoint={}",
+        guild_id, channel_id, endpoint
+    );
+
+    let app_clone = app.clone();
+    let app_err = app.clone();
+    let state_clone = DiscordState {
+        session: state.session.clone(),
+        voice: state.voice.clone(),
+        voice_conn: state.voice_conn.clone(),
+    };
+
+    let req = VoiceUdpConnectRequest {
+        session_id,
+        token,
+        endpoint,
+        guild_id,
+        channel_id,
+    };
+
+    tokio::spawn(async move {
+        if let Err(e) = run_voice_udp(app_clone, state_clone, req).await {
+            log::error!("Voice UDP error: {e}");
+            let _ = app_err.emit("voice_status", json!({"status": "error", "error": e}));
+        }
+    });
+
+    Ok(())
+}
+
+async fn run_voice_udp(
+    app: AppHandle,
+    state: DiscordState,
+    req: VoiceUdpConnectRequest,
+) -> Result<(), String> {
+    // Разбираем endpoint (формат: host:port)
+    let endpoint_addr: std::net::SocketAddr = req
+        .endpoint
+        .parse()
+        .map_err(|e| format!("Неверный endpoint {}: {e}", req.endpoint))?;
+
+    // 1) Создаём UDP сокет и подключаемся к голосовому серверу Discord
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| format!("Не удалось bind UDP: {e}"))?;
+    socket
+        .connect(endpoint_addr)
+        .await
+        .map_err(|e| format!("Не удалось connect UDP: {e}"))?;
+    let local = socket.local_addr().map_err(|e| e.to_string())?;
+    log::info!("Voice UDP bound to {local}, connected to {endpoint_addr}");
+
+    // Сохраняем локальный порт в состояние (для отладки)
+    {
+        let mut conn = state.voice_conn.lock().unwrap();
+        conn.connected = true;
+        conn.mode = Some("xsalsa20_poly1305".into());
+    }
+
+    // 2) IP Discovery (payload 0x01): 0x01 + 70 байт нулей
+    let mut discovery = vec![0x01u8];
+    discovery.resize(71, 0);
+    socket.send(&discovery).await.map_err(|e| e.to_string())?;
+    log::debug!("IP Discovery пакет отправлен");
+
+    let mut buf = [0u8; 512];
+    let n = socket.recv(&mut buf).await.map_err(|e| e.to_string())?;
+    if n < 7 || buf[0] != 0x01 {
+        return Err(format!("Неожиданный ответ на IP Discovery: {n} байт"));
+    }
+    let local_ip = std::net::IpAddr::from([buf[1], buf[2], buf[3], buf[4]]);
+    let local_port = u16::from_be_bytes([buf[5], buf[6]]);
+    log::info!("IP Discovery ответ: наш внешний адрес {local_ip}:{local_port}");
+
+    // 3) Select Protocol (payload 0x02): режим xsalsa20_poly1305
+    let mode = b"xsalsa20_poly1305";
+    let mut select = vec![0x02u8];
+    select.extend_from_slice(&(mode.len() as u16).to_be_bytes());
+    select.extend_from_slice(mode);
+    socket.send(&select).await.map_err(|e| e.to_string())?;
+    log::debug!("Select Protocol отправлен (mode={})", std::str::from_utf8(mode).unwrap_or(""));
+
+    // 4) Ответ на Select Protocol: secret_key (32 байта) + ssrc (4 байта)
+    let n = socket.recv(&mut buf).await.map_err(|e| e.to_string())?;
+    if n < 36 || buf[0] != 0x04 {
+        return Err(format!(
+            "Неожиданный ответ на Select Protocol: {n} байт, первый байт {}",
+            buf[0]
+        ));
+    }
+    let secret_key = buf[1..33].to_vec();
+    let ssrc = u32::from_be_bytes([buf[33], buf[34], buf[35], buf[36]]);
+    log::info!(
+        "Select Protocol OK: secret_key={}… ssrc={}",
+        hex::encode(&secret_key[..4]),
+        ssrc
+    );
+
+    {
+        let mut conn = state.voice_conn.lock().unwrap();
+        conn.secret_key = Some(secret_key);
+        conn.ssrc = Some(ssrc);
+        conn.connected = true;
+    }
+
+    let _ = app.emit(
+        "voice_channel_ready",
+        json!({
+            "guild_id": req.guild_id,
+            "channel_id": req.channel_id,
+            "ssrc": ssrc,
+            "mode": "xsalsa20_poly1305",
+            "local_ip": local_ip.to_string(),
+            "local_port": local_port,
+        }),
+    );
+    let _ = app.emit("voice_status", json!({"status": "connected"}));
+
+    // 5) Voice Heartbeat (payload 0x03) — держим соединение живым
+    let mut hb = tokio::time::interval(std::time::Duration::from_secs(5));
+    loop {
+        hb.tick().await;
+        let hb_pkt = vec![0x03u8];
+        if socket.send(&hb_pkt).await.is_err() {
+            log::warn!("Voice heartbeat send failed, соединение perdu");
+            break;
+        }
+        log::debug!("Voice heartbeat отправлен");
+
+        // Проверяем, не попросили ли отключиться
+        {
+            let conn = state.voice_conn.lock().unwrap();
+            if !conn.connected {
+                break;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -682,7 +855,8 @@ fn main() {
             send_message,
             connect_gateway,
             join_voice_channel,
-            leave_voice_channel
+            leave_voice_channel,
+            voice_udp_connect
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
