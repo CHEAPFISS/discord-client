@@ -38,11 +38,12 @@ pub type ActiveVoiceConnection = oto::VoiceConnection;
 pub struct VoiceSlot {
     pub conn: Option<ActiveVoiceConnection>,
     pub session_id: Option<String>,
+    pub token: Option<String>,
 }
 
 impl Default for VoiceSlot {
     fn default() -> Self {
-        Self { conn: None, session_id: None }
+        Self { conn: None, session_id: None, token: None }
     }
 }
 

@@ -654,7 +654,11 @@ async fn leave_voice_channel(
     };
     // закрываем oto-соединение, если активно
     let active_conn = state.voice_conn.lock().unwrap().conn.take();
-    state.voice_conn.lock().unwrap().session_id = None;
+    {
+        let mut slot = state.voice_conn.lock().unwrap();
+        slot.session_id = None;
+        slot.token = None;
+    }
     state.voice_rejoin.store(0, std::sync::atomic::Ordering::SeqCst);
     if let Some(conn) = active_conn {
         let _ = conn.shutdown().await;
@@ -745,8 +749,12 @@ async fn voice_udp_connect(
 }
 
 /// Голосовое подключение Discord через oto: Voice Gateway v8 + DAVE (E2EE) + RTP.
-/// DAVE обязателен с марта 2026 — без него Discord закрывает voice WS кодом 4017.
-/// Токен Discord одноразовый: сериализуем подключение локом и дедуплим по session_id.
+///
+/// Правила управления соединением:
+/// • Токен Discord одноразовый → сериализуем подключение локом.
+/// • Пара (session, token) идентифицирует попытку → дедуп по ней.
+/// • Смена канала в том же guild НЕ рвёт WS: живому соединению отдаём свежую пару
+///   через replace_voice_info (иначе Discord шлёт каскад 4022/4014 за рструкция).
 async fn connect_voice(
     app: AppHandle,
     state: DiscordState,
@@ -772,25 +780,29 @@ async fn connect_voice(
 
     let _guard = state.voice_connect_lock.lock().await;
 
-    // Дедуп: пропускаем ТОЛЬКО если сессия совпадает и соединение реально живо (Connected).
-    // Мёртвые (Failed/Closed/Reconnecting с протухшей сессией) — уничтожаются ниже и
-    // заменяются свежим подключением, иначе получается «вечно подключаюсь…».
-    {
+    // Дедуп: пара (session, token) уже применена к не-терминальному соединению.
+    let dup = {
         let slot = state.voice_conn.lock().unwrap();
-        let alive = slot
-            .conn
-            .as_ref()
-            .map(|c| c.state().phase() == oto::ConnectionPhase::Connected)
-            .unwrap_or(false);
-        if alive && slot.session_id.as_deref() == Some(session_id.as_str()) {
-            log::debug!("Voice: session уже подключена, дедуп-пропуск");
-            let _ = app.emit("voice_status", json!({"status": "connected"}));
-            return Ok(());
+        match slot.conn.as_ref() {
+            Some(c) => {
+                let ph = c.state().phase();
+                let terminal =
+                    matches!(ph, oto::ConnectionPhase::Failed | oto::ConnectionPhase::Closed);
+                !terminal
+                    && slot.session_id.as_deref() == Some(session_id.as_str())
+                    && slot.token.as_deref() == Some(token.as_str())
+            }
+            None => false,
         }
+    };
+    if dup {
+        log::debug!("Voice: пара (session, token) уже применена, дедуп-пропуск");
+        return Ok(());
     }
 
     log::info!(
-        "Voice connect (oto): guild={guild} channel={channel} session={session_id} endpoint={endpoint}"
+        "Voice connect (oto): guild={guild} channel={channel} session={} endpoint={endpoint}",
+        &session_id[..session_id.len().min(8)]
     );
 
     let info = oto::VoiceConnectInfo::new(
@@ -799,99 +811,169 @@ async fn connect_voice(
         channel,
         session_id.clone(),
         endpoint,
-        oto::VoiceToken::new(token),
+        oto::VoiceToken::new(token.clone()),
     );
-    let oto = oto::Oto::builder().build().map_err(|e| format!("oto init: {e}"))?;
 
-    // Помечаем сессию заранее и забираем/закрываем прежнее соединение.
-    let prev = {
+    // Запоминаем пару оптимистично (эхо-вызовы не будут повторять в meanwhile).
+    let (prev, prev_alive) = {
         let mut slot = state.voice_conn.lock().unwrap();
         slot.session_id = Some(session_id.clone());
-        slot.conn.take()
+        slot.token = Some(token.clone());
+        let prev = slot.conn.take();
+        let alive = prev
+            .as_ref()
+            .is_some_and(|p| {
+                !matches!(
+                    p.state().phase(),
+                    oto::ConnectionPhase::Failed | oto::ConnectionPhase::Closed
+                )
+            });
+        (prev, alive)
     };
-    if let Some(prev) = prev {
-        let _ = prev.shutdown().await;
-    }
 
-    let conn = match oto.connect(info).await {
-        Ok(c) => c,
-        Err(e) => {
-            // сброс пометки, чтобы следующие события голоса могли попытаться снова
-            state.voice_conn.lock().unwrap().session_id = None;
-            if matches!(e.retry_disposition(), oto::RetryDisposition::NeedsFreshVoiceInfo) {
-                request_voice_rejoin(&app, &state);
+    let conn = match prev {
+        Some(p) if prev_alive => {
+            // Живое соединение: не рвём WS, отдаём свежую пару на месте.
+            let ph = p.state().phase();
+            match p.replace_voice_info(info).await {
+                Ok(generation) => {
+                    log::info!(
+                        "Voice (oto) replace_voice_info OK (phase={ph:?}, gen={})",
+                        generation.get()
+                    );
+                    p
+                }
+                Err(e) => {
+                    state.voice_conn.lock().unwrap().session_id = None;
+                    state.voice_conn.lock().unwrap().token = None;
+                    let _ = p.shutdown().await;
+                    if matches!(e.retry_disposition(), oto::RetryDisposition::NeedsFreshVoiceInfo) {
+                        request_voice_rejoin(&app, &state);
+                    }
+                    return Err(format!("oto replace_voice_info: {e}"));
+                }
             }
-            return Err(format!("oto connect: {e}"));
+        }
+        Some(p) => {
+            // Мёртвое соединение — закрываем и подключаемся начисто.
+            let _ = p.shutdown().await;
+            let oto = oto::Oto::builder().build().map_err(|e| format!("oto init: {e}"))?;
+            match oto.connect(info).await {
+                Ok(c) => c,
+                Err(e) => {
+                    state.voice_conn.lock().unwrap().session_id = None;
+                    state.voice_conn.lock().unwrap().token = None;
+                    if matches!(e.retry_disposition(), oto::RetryDisposition::NeedsFreshVoiceInfo) {
+                        request_voice_rejoin(&app, &state);
+                    }
+                    return Err(format!("oto connect: {e}"));
+                }
+            }
+        }
+        None => {
+            let oto = oto::Oto::builder().build().map_err(|e| format!("oto init: {e}"))?;
+            match oto.connect(info).await {
+                Ok(c) => c,
+                Err(e) => {
+                    state.voice_conn.lock().unwrap().session_id = None;
+                    state.voice_conn.lock().unwrap().token = None;
+                    if matches!(e.retry_disposition(), oto::RetryDisposition::NeedsFreshVoiceInfo) {
+                        request_voice_rejoin(&app, &state);
+                    }
+                    return Err(format!("oto connect: {e}"));
+                }
+            }
         }
     };
+
     state.voice_rejoin.store(0, std::sync::atomic::Ordering::SeqCst);
-    log::info!(
-        "Voice (oto) подключено: phase={:?} rtt={:?}",
-        conn.state().phase(),
-        conn.state().gateway_rtt()
-    );
+
+    let phase = conn.state().phase();
+    log::info!("Voice (oto) готово: phase={phase:?} rtt={:?}", conn.state().gateway_rtt());
 
     state.voice_conn.lock().unwrap().conn = Some(conn.clone());
     let _ = app.emit("voice_status", json!({"status": "connected"}));
 
-    // Насос событий соединения → UI-статусы.
-    // Фильтр по поколению: события заменённого (закрытого) соединения не трогаем.
+    // Насос событий: работает ТОЛЬКО по актуальному соединению в слоте (generation).
+    // Двойных насосов можно не бояться — события чужих поколений отфильтрованы здесь.
     let pump_app = app.clone();
-    let my_gen = conn.state().generation();
+    let slot_ref = state.voice_conn.clone();
     let mut sub = conn
         .subscribe_events()
         .map_err(|e| format!("oto subscribe: {e}"))?;
     tokio::spawn(async move {
         loop {
-            match sub.recv().await {
-                Ok(event) => {
-                    let foreign = match &event {
-                        oto::ConnectionEvent::StateChanged { generation, .. } => *generation != my_gen,
-                        oto::ConnectionEvent::Failure(f) => f.generation() != my_gen,
-                        _ => false,
+            let event = match sub.recv().await {
+                Ok(ev) => ev,
+                Err(_) => break,
+            };
+            // Актуальное состояние слота на момент прихода события.
+            let (cur_gen, cur_phase) = {
+                let slot = slot_ref.lock().unwrap();
+                match slot.conn.as_ref() {
+                    Some(c) => {
+                        let s = c.state();
+                        (Some(s.generation()), Some(s.phase()))
+                    }
+                    None => (None, None),
+                }
+            };
+            let ev_gen = match &event {
+                oto::ConnectionEvent::StateChanged { generation, .. } => Some(*generation),
+                oto::ConnectionEvent::Failure(f) => Some(f.generation()),
+                _ => None,
+            };
+            if let Some(g) = ev_gen {
+                if Some(g) != cur_gen {
+                    continue; // поколение уже заменено — событие устарело
+                }
+            } else if matches!(event, oto::ConnectionEvent::Closed(_))
+                && cur_phase != Some(oto::ConnectionPhase::Closed)
+            {
+                continue; // Closed старого соединения — в слоте уже другое/живое
+            }
+            match event {
+                oto::ConnectionEvent::StateChanged { phase, .. } => {
+                    log::debug!("Voice (oto) phase: {phase:?}");
+                    let (status, err) = match phase {
+                        oto::ConnectionPhase::Connected => ("connected", None),
+                        oto::ConnectionPhase::Resuming
+                        | oto::ConnectionPhase::Reconnecting => ("reconnecting", None),
+                        oto::ConnectionPhase::NeedsFreshVoiceInfo => ("needs_fresh", None),
+                        oto::ConnectionPhase::Closed => ("left", None),
+                        oto::ConnectionPhase::Failed => ("error", Some("voice connection failed".to_string())),
+                        _ => ("connecting", None),
                     };
-                    if foreign {
-                        continue;
-                    }
-                    match event {
-                    oto::ConnectionEvent::StateChanged { phase, .. } => {
-                        log::debug!("Voice (oto) phase: {phase:?}");
-                        let (status, err) = match phase {
-                            oto::ConnectionPhase::Connected => ("connected", None),
-                            oto::ConnectionPhase::Resuming
-                            | oto::ConnectionPhase::Reconnecting => ("reconnecting", None),
-                            oto::ConnectionPhase::NeedsFreshVoiceInfo => ("needs_fresh", None),
-                            oto::ConnectionPhase::Closed => ("left", None),
-                            oto::ConnectionPhase::Failed => ("error", Some("voice connection failed".to_string())),
-                            _ => ("connecting", None),
-                        };
-                        let payload = match err {
-                            Some(e) => json!({"status": "error", "error": e}),
-                            None => json!({"status": status}),
-                        };
-                        let _ = pump_app.emit("voice_status", payload);
-                    }
-                    oto::ConnectionEvent::Failure(f) => {
-                        log::warn!(
-                            "Voice (oto) failure: op={:?} kind={:?} code={:?} retry={:?}",
-                            f.operation(),
-                            f.kind(),
-                            f.safe_code(),
-                            f.retry_disposition()
-                        );
+                    let payload = match err {
+                        Some(e) => json!({"status": "error", "error": e}),
+                        None => json!({"status": status}),
+                    };
+                    let _ = pump_app.emit("voice_status", payload);
+                }
+                oto::ConnectionEvent::Failure(f) => {
+                    log::warn!(
+                        "Voice (oto) failure: op={:?} kind={:?} code={:?} retry={:?}",
+                        f.operation(),
+                        f.kind(),
+                        f.safe_code(),
+                        f.retry_disposition()
+                    );
+                    // NeedsFreshVoiceInfo — регулярный случай смены канала:
+                    // авто-rejoin уже работает, мигание ошибкой в UI не нужно.
+                    if matches!(f.retry_disposition(), oto::RetryDisposition::NeedsFreshVoiceInfo) {
+                        let _ = pump_app.emit("voice_status", json!({"status": "joining"}));
+                    } else {
                         let _ = pump_app.emit(
                             "voice_status",
                             json!({"status": "error", "error": format!("{:?}/{:?}", f.operation(), f.kind())}),
                         );
                     }
-                    oto::ConnectionEvent::Closed(_) => {
-                        let _ = pump_app.emit("voice_status", json!({"status": "left"}));
-                        break;
-                    }
-                        _ => {}
-                    }
                 }
-                Err(_) => break,
+                oto::ConnectionEvent::Closed(_) => {
+                    let _ = pump_app.emit("voice_status", json!({"status": "left"}));
+                    break;
+                }
+                _ => {}
             }
         }
     });
