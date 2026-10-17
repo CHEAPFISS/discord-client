@@ -42,3 +42,7 @@ codegen-units = 1
 # контракт poll (≤2 мс на кадр) — oto считает это сбоем и роняет отправку.
 [profile.dev.package.nnnoiseless]
 opt-level = 3
+# Оптимизировать все зависимости (libopus, ring, …): unoptimized libopus тоже
+# периодически вылезал за 2 мс CPU на кадр → FrameSourceContract каждый ~3 мин.
+[profile.dev.package."*"]
+opt-level = 2
