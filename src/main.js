@@ -392,6 +392,12 @@ if (listen) {
       voiceCall.classList.remove('active');
     } else if (p.status === 'joining') {
       setStatus('Подключаюсь…');
+    } else if (p.status === 'connected') {
+      setStatus('Голос: подключено (DAVE/E2EE) 🎧');
+    } else if (p.status === 'reconnecting') {
+      setStatus('Голос: переподключение…');
+    } else if (p.status === 'error') {
+      setStatus('Ошибка голоса: ' + (p.error || 'неизвестно'));
     }
   });
   listen('voice_channel_ready', (event) => {

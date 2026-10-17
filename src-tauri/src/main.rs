@@ -5,9 +5,8 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
 use tauri::{command, generate_context, generate_handler, AppHandle, Emitter, Manager, State};
-use tokio_tungstenite::tungstenite::Message;
 use tokio::io::AsyncReadExt;
-use tokio::net::UdpSocket;
+use tokio_tungstenite::tungstenite::Message;
 
 const API_BASE: &str = "https://discord.com/api/v10";
 const REDIRECT_URI: &str = "http://localhost:1436/callback";
@@ -71,8 +70,7 @@ async fn gateway_once(
     token: &str,
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
 ) -> Result<(), String> {
-    use tokio_tungstenite::tungstenite::Message;
-
+    
     let (ws, _) = tokio_tungstenite::connect_async(GATEWAY_URL)
         .await
         .map_err(|e| format!("connect: {e}"))?;
@@ -643,12 +641,10 @@ async fn leave_voice_channel(
         *voice = None;
         guild
     };
-    // сбрасываем флаг соединения, чтобы цикл heartbeat в UDP-задаче прервался
-    {
-        let mut conn = state.voice_conn.lock().unwrap();
-        conn.connected = false;
-        conn.secret_key = None;
-        conn.ssrc = None;
+    // закрываем oto-соединение, если активно
+    let active_conn = state.voice_conn.lock().unwrap().take();
+    if let Some(conn) = active_conn {
+        let _ = conn.shutdown().await;
     }
     if let Some(guild_id) = guild_id {
         let op4 = json!({
@@ -666,19 +662,10 @@ async fn leave_voice_channel(
     Ok(())
 }
 
-/// Запрос на голосовое UDP-подключение (приходит после voice_channel_ready из Gateway).
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VoiceUdpConnectRequest {
-    pub session_id: String,
-    pub token: String,
-    pub endpoint: String,
-    pub guild_id: String,
-    pub channel_id: String,
-}
-
 /// Голосовое подключение к серверу Discord:
 /// Voice WebSocket (identify → READY с ssrc) → UDP (IP Discovery → Select Protocol → Heartbeat).
+/// Голосовое подключение Discord через oto: Voice Gateway v8 + DAVE (E2EE) + RTP.
+/// DAVE обязателен с марта 2026 — без него Discord закрывает voice WS кодом 4017.
 #[command]
 async fn voice_udp_connect(
     app: AppHandle,
@@ -689,330 +676,101 @@ async fn voice_udp_connect(
     guild_id: String,
     channel_id: String,
 ) -> Result<(), String> {
+    let user_id = {
+        let guard = state.session.lock().unwrap();
+        guard
+            .as_ref()
+            .ok_or("Не залогинен")?
+            .user_id
+            .clone()
+            .parse::<u64>()
+            .map_err(|e| format!("user_id: {e}"))?
+    };
+    let guild = guild_id.parse::<u64>().map_err(|e| format!("guild_id: {e}"))?;
+    let channel = channel_id.parse::<u64>().map_err(|e| format!("channel_id: {e}"))?;
+    let endpoint = endpoint.trim().trim_start_matches("wss://").to_string();
+
+    log::info!("Voice connect (oto): guild={guild} channel={channel} endpoint={endpoint}");
+
+    // Закрываем прежнее соединение, если оно осталось от прошлого канала.
+    let prev = state.voice_conn.lock().unwrap().take();
+    if let Some(prev) = prev {
+        let _ = prev.shutdown().await;
+    }
+
+    let info = oto::VoiceConnectInfo::new(
+        guild,
+        user_id,
+        channel,
+        session_id,
+        endpoint,
+        oto::VoiceToken::new(token),
+    );
+    let oto = oto::Oto::builder().build().map_err(|e| format!("oto init: {e}"))?;
+    let conn = oto
+        .connect(info)
+        .await
+        .map_err(|e| format!("oto connect: {e}"))?;
     log::info!(
-        "Voice connect: guild={} channel={} endpoint={}",
-        guild_id, channel_id, endpoint
+        "Voice (oto) подключено: phase={:?} rtt={:?}",
+        conn.state().phase(),
+        conn.state().gateway_rtt()
     );
 
-    let app_clone = app.clone();
-    let app_err = app.clone();
-    let state_clone = DiscordState {
-        session: state.session.clone(),
-        voice: state.voice.clone(),
-        voice_conn: state.voice_conn.clone(),
-    };
+    *state.voice_conn.lock().unwrap() = Some(conn.clone());
+    let _ = app.emit("voice_status", json!({"status": "connected"}));
 
-    let req = VoiceUdpConnectRequest {
-        session_id,
-        token,
-        endpoint,
-        guild_id,
-        channel_id,
-    };
-
+    // Насос событий соединения → UI-статусы.
+    let pump_app = app.clone();
+    let mut sub = conn
+        .subscribe_events()
+        .map_err(|e| format!("oto subscribe: {e}"))?;
     tokio::spawn(async move {
-        if let Err(e) = run_voice_udp(app_clone, state_clone, req).await {
-            log::error!("Voice error: {e}");
-            let _ = app_err.emit("voice_status", json!({"status": "error", "error": e}));
+        loop {
+            match sub.recv().await {
+                Ok(event) => match event {
+                    oto::ConnectionEvent::StateChanged { phase, .. } => {
+                        log::debug!("Voice (oto) phase: {phase:?}");
+                        let (status, err) = match phase {
+                            oto::ConnectionPhase::Connected => ("connected", None),
+                            oto::ConnectionPhase::Resuming
+                            | oto::ConnectionPhase::Reconnecting => ("reconnecting", None),
+                            oto::ConnectionPhase::NeedsFreshVoiceInfo => ("needs_fresh", None),
+                            oto::ConnectionPhase::Closed => ("left", None),
+                            oto::ConnectionPhase::Failed => ("error", Some("voice connection failed".to_string())),
+                            _ => ("connecting", None),
+                        };
+                        let payload = match err {
+                            Some(e) => json!({"status": "error", "error": e}),
+                            None => json!({"status": status}),
+                        };
+                        let _ = pump_app.emit("voice_status", payload);
+                    }
+                    oto::ConnectionEvent::Failure(f) => {
+                        log::warn!(
+                            "Voice (oto) failure: op={:?} kind={:?} code={:?} retry={:?}",
+                            f.operation(),
+                            f.kind(),
+                            f.safe_code(),
+                            f.retry_disposition()
+                        );
+                        let _ = pump_app.emit(
+                            "voice_status",
+                            json!({"status": "error", "error": format!("{:?}/{:?}", f.operation(), f.kind())}),
+                        );
+                    }
+                    oto::ConnectionEvent::Closed(_) => {
+                        let _ = pump_app.emit("voice_status", json!({"status": "left"}));
+                        break;
+                    }
+                    _ => {}
+                },
+                Err(_) => break,
+            }
         }
     });
 
     Ok(())
-}
-
-async fn run_voice_udp(
-    app: AppHandle,
-    state: DiscordState,
-    req: VoiceUdpConnectRequest,
-) -> Result<(), String> {
-    use tokio_tungstenite::tungstenite::Message;
-
-    log::info!(
-        "Voice connect: guild={} channel={} endpoint={}",
-        req.guild_id, req.channel_id, req.endpoint
-    );
-
-    let user_id = {
-        let guard = state.session.lock().unwrap();
-        guard.as_ref().ok_or("Не залогинен")?.user_id.clone()
-    };
-
-    // 1) Голосовой WebSocket (протокол v8)
-    let voice_ws_url = format!("wss://{}/?v=8", req.endpoint);
-    let (ws_stream, _) = tokio_tungstenite::connect_async(voice_ws_url.as_str())
-        .await
-        .map_err(|e| format!("Voice WebSocket connect: {e}"))?;
-    let (mut vw_write, mut vw_read) = ws_stream.split();
-
-    // 2) Hello (op 8) — heartbeat_interval
-    let mut hb_ms: u64 = 45000;
-    loop {
-        let msg = vw_read.next().await.ok_or("Voice WS закрылся до Hello")?;
-        if let Message::Text(text) = msg.map_err(|e| e.to_string())? {
-            let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-            if v["op"].as_u64() == Some(8) {
-                hb_ms = v["d"]["heartbeat_interval"].as_u64().unwrap_or(45000);
-                log::debug!("Voice WS Hello: heartbeat {hb_ms}мс");
-                break;
-            }
-        }
-    }
-
-    // 3) Identify (в v8 это op 0!)
-    let identify = json!({
-        "op": 0,
-        "d": {
-            "server_id": req.guild_id,
-            "user_id": user_id,
-            "session_id": req.session_id,
-            "token": req.token,
-            "max_dave_protocol_version": 0
-        }
-    });
-    vw_write
-        .send(Message::Text(identify.to_string()))
-        .await
-        .map_err(|e| format!("Voice identify send: {e}"))?;
-    log::debug!("Voice identify (op 0) отправлен");
-
-    let mut last_seq: i64 = -1;
-    let mut hb = tokio::time::interval(std::time::Duration::from_millis(hb_ms));
-    hb.tick().await; // первый tick мгновенный
-
-    // Отправка heartbeat с seq_ack (v8)
-    macro_rules! voice_hb {
-        ($w:expr, $seq:expr) => {{
-            let t = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            let hbv = json!({"op": 3, "d": {"t": t, "seq_ack": $seq}});
-            if $w.send(Message::Text(hbv.to_string())).await.is_err() {
-                return Err("Voice heartbeat send failed".into());
-            }
-            log::debug!("Voice heartbeat отправлен");
-        }};
-    }
-
-    // 4) Ждём Ready (op 2) — ssrc, ip, port, modes. Параллельно heartbeat и Speaking-события.
-    let mut ready: Option<serde_json::Value> = None;
-    while ready.is_none() {
-        tokio::select! {
-            _ = hb.tick() => {
-                voice_hb!(vw_write, last_seq);
-            }
-            msg = vw_read.next() => {
-                let msg = msg.ok_or("Voice WS закрылся (ожидание Ready)")?;
-                match msg.map_err(|e| e.to_string())? {
-                    Message::Text(text) => {
-                        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-                        if let Some(s) = v["seq"].as_u64() { last_seq = s as i64; }
-                        let op = v["op"].as_u64().unwrap_or(999);
-                        if op == 2 {
-                            ready = Some(v["d"].clone());
-                        } else if op == 0 && v["t"].as_str() == Some("SPEAKING") {
-                            let _ = app.emit("voice_speaking", json!({
-                                "user_id": v["d"]["user_id"],
-                                "ssrc": v["d"]["ssrc"],
-                                "speaking": v["d"]["speaking"],
-                            }));
-                        } else {
-                            log::debug!("Voice recv op={op} t={}", v["t"].as_str().unwrap_or(""));
-                        }
-                    }
-                    Message::Close(c) => return Err(format!("Voice WS закрылся: {c:?}")),
-                    _ => {}
-                }
-            }
-        }
-    }
-    let ready = ready.unwrap();
-    let ssrc = ready["ssrc"].as_u64().unwrap_or(0) as u32;
-    let v_ip = ready["ip"].as_str().unwrap_or("").to_string();
-    let v_port = ready["port"].as_u64().unwrap_or(0) as u16;
-    let modes: Vec<String> = ready["modes"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|m| m.as_str().map(String::from)).collect())
-        .unwrap_or_default();
-    let chosen_mode = if modes.iter().any(|m| m == "aead_aes256_gcm_rtpsize") {
-        "aead_aes256_gcm_rtpsize"
-    } else {
-        "aead_xchacha20_poly1305_rtpsize"
-    };
-    log::info!(
-        "Voice Ready: ssrc={ssrc} udp={v_ip}:{v_port} mode={chosen_mode} modes={modes:?}"
-    );
-
-    // 5) UDP: подключаемся к ip:port из Ready (не к endpoint) + IP Discovery
-    let socket = UdpSocket::bind("0.0.0.0:0")
-        .await
-        .map_err(|e| format!("UDP bind: {e}"))?;
-    socket
-        .connect(format!("{v_ip}:{v_port}").as_str())
-        .await
-        .map_err(|e| format!("UDP connect: {e}"))?;
-    let local = socket.local_addr().map_err(|e| e.to_string())?;
-    log::info!("Voice UDP bound {local}");
-
-    // IP Discovery: Type(0x0001, 2б) + Length(70, 2б) + SSRC(4б) + Address(64б 0x00) + Port(2б 0x00)
-    let mut disco = Vec::with_capacity(74);
-    disco.extend_from_slice(&0x0001u16.to_be_bytes());
-    disco.extend_from_slice(&70u16.to_be_bytes());
-    disco.extend_from_slice(&ssrc.to_be_bytes());
-    disco.extend_from_slice(&[0u8; 64]);
-    disco.extend_from_slice(&0u16.to_be_bytes());
-    socket.send(&disco).await.map_err(|e| e.to_string())?;
-    log::debug!("IP Discovery отправлен (74 байта)");
-
-    let mut buf = [0u8; 512];
-    let n = socket.recv(&mut buf).await.map_err(|e| e.to_string())?;
-    if n < 74 || buf[0] != 0x00 || buf[1] != 0x02 {
-        return Err(format!("Неожиданный ответ IP Discovery: {n} байт, type={:02x}{:02x}", buf[0], buf[1]));
-    }
-    let ext_ssrc = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
-    if ext_ssrc != ssrc {
-        log::warn!("IP Discovery ssrc не совпал: {ext_ssrc} != {ssrc}");
-    }
-    let addr_end = buf[8..72].iter().position(|&b| b == 0).map(|p| 8 + p).unwrap_or(72);
-    let ext_ip = String::from_utf8_lossy(&buf[8..addr_end]).to_string();
-    let ext_port = u16::from_be_bytes([buf[72], buf[73]]);
-    log::info!("IP Discovery: наш внешний адрес {ext_ip}:{ext_port}");
-
-    // 6) Select Protocol (op 1) через WebSocket (не UDP!)
-    let select = json!({
-        "op": 1,
-        "d": {
-            "protocol": "udp",
-            "data": {
-                "address": ext_ip,
-                "port": ext_port,
-                "mode": chosen_mode
-            }
-        }
-    });
-    vw_write
-        .send(Message::Text(select.to_string()))
-        .await
-        .map_err(|e| format!("Select Protocol send: {e}"))?;
-    log::debug!("Select Protocol отправлен (mode={chosen_mode})");
-
-    // 7) Session Description (op 4) — secret_key
-    let mut secret_key: Option<Vec<u8>> = None;
-    let mut dave_version: u64 = 0;
-    while secret_key.is_none() {
-        tokio::select! {
-            _ = hb.tick() => {
-                voice_hb!(vw_write, last_seq);
-            }
-            msg = vw_read.next() => {
-                let msg = msg.ok_or("Voice WS закрылся (ожидание Session Description)")?;
-                match msg.map_err(|e| e.to_string())? {
-                    Message::Text(text) => {
-                        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-                        if let Some(s) = v["seq"].as_u64() { last_seq = s as i64; }
-                        let op = v["op"].as_u64().unwrap_or(999);
-                        if op == 4 {
-                            let d = &v["d"];
-                            secret_key = Some(
-                                d["secret_key"]
-                                    .as_array()
-                                    .map(|a| a.iter().filter_map(|b| b.as_u64().map(|x| x as u8)).collect())
-                                    .unwrap_or_default()
-                            );
-                            dave_version = d["dave_protocol_version"].as_u64().unwrap_or(0);
-                            log::info!("Session Description получена (dave={dave_version})");
-                        } else if op == 0 && v["t"].as_str() == Some("SPEAKING") {
-                            let _ = app.emit("voice_speaking", json!({
-                                "user_id": v["d"]["user_id"],
-                                "ssrc": v["d"]["ssrc"],
-                                "speaking": v["d"]["speaking"],
-                            }));
-                        } else {
-                            log::debug!("Voice recv op={op}");
-                        }
-                    }
-                    Message::Close(c) => return Err(format!("Voice WS закрылся: {c:?}")),
-                    _ => {}
-                }
-            }
-        }
-    }
-    let secret_key = secret_key.unwrap();
-    if secret_key.len() != 32 {
-        return Err(format!("secret_key неожиданной длины: {}", secret_key.len()));
-    }
-    log::info!(
-        "Select Protocol OK: secret_key={}… ssrc={ssrc}",
-        hex::encode(&secret_key[..4])
-    );
-
-    {
-        let mut conn = state.voice_conn.lock().unwrap();
-        conn.secret_key = Some(secret_key);
-        conn.ssrc = Some(ssrc);
-        conn.mode = Some(chosen_mode.to_string());
-        conn.connected = true;
-    }
-
-    let _ = app.emit(
-        "voice_channel_ready",
-        json!({
-            "guild_id": req.guild_id,
-            "channel_id": req.channel_id,
-            "ssrc": ssrc,
-            "mode": chosen_mode,
-            "udp": format!("{v_ip}:{v_port}"),
-            "external": format!("{ext_ip}:{ext_port}"),
-            "dave_protocol_version": dave_version,
-        }),
-    );
-    let _ = app.emit("voice_status", json!({"status": "connected"}));
-
-    // 8) Постоянный цикл: heartbeat по WS + Speaking-события + чтение UDP (аудио — Этап 3.2)
-    loop {
-        tokio::select! {
-            _ = hb.tick() => {
-                voice_hb!(vw_write, last_seq);
-                let conn = state.voice_conn.lock().unwrap();
-                if !conn.connected {
-                    return Ok(());
-                }
-            }
-            msg = vw_read.next() => {
-                let msg = msg.ok_or("Voice WS закрылся (steady)")?;
-                match msg.map_err(|e| e.to_string())? {
-                    Message::Text(text) => {
-                        let v: serde_json::Value = match serde_json::from_str(&text) {
-                            Ok(v) => v,
-                            Err(_) => continue,
-                        };
-                        if let Some(s) = v["seq"].as_u64() { last_seq = s as i64; }
-                        let op = v["op"].as_u64().unwrap_or(999);
-                        if op == 0 && v["t"].as_str() == Some("SPEAKING") {
-                            let d = &v["d"];
-                            let _ = app.emit("voice_speaking", json!({
-                                "user_id": d["user_id"],
-                                "ssrc": d["ssrc"],
-                                "speaking": d["speaking"],
-                            }));
-                            log::debug!("Speaking: user={} flags={}", d["user_id"], d["speaking"]);
-                        } else if op != 6 {
-                            log::debug!("Voice recv op={op}");
-                        }
-                    }
-                    Message::Close(c) => return Err(format!("Voice WS закрылся: {c:?}")),
-                    _ => {}
-                }
-            }
-            n = socket.recv(&mut buf) => {
-                match n {
-                    Ok(0) => continue,
-                    Ok(_n) => { /* RTP-пакеты других участников — обработаем в Этапе 3.2 */ }
-                    Err(e) => log::debug!("UDP recv: {e}"),
-                }
-            }
-        }
-    }
 }
 
 // --- Точка входа ---

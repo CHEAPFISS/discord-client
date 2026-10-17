@@ -19,6 +19,10 @@ bytes = "1"
 hex = "0.4"
 # opus = { version = "0.1", optional = true }  # требует libopus в системе — подключим на этапе звука
 
+# Голосовой транспорт Discord: Voice Gateway v8 + DAVE (E2EE) + RTP + paced Opus.
+# Без DAVE Discord закрывает voice WS с кодом 4017 "E2EE/DAVE protocol required".
+oto = { git = "https://github.com/rayan6ms/oto", tag = "v1.0.0" }
+
 # Нативная WebRTC библиотека — подключим после выбора конкретной реализации
 #пример: webrtc = { version = "0.9", features = ["audio", "video"] }
 

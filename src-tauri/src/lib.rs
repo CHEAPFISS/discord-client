@@ -29,14 +29,17 @@ pub struct VoiceConnectionMeta {
     pub connected: bool,
 }
 
+/// Активное голосовое соединение (oto) — держим хендл живым, иначе соединение закроется.
+pub type ActiveVoiceConnection = oto::VoiceConnection;
+
 // --- Состояние приложения ---
 
 pub struct DiscordState {
     pub session: Arc<Mutex<Option<DiscordSession>>>,
     /// Данные голосового подключения (session_id/token/endpoint приходят асинхронно).
     pub voice: Arc<Mutex<Option<VoiceData>>>,
-    /// Метрики голосового UDP-соединения (secret_key, ssrc и т.д.).
-    pub voice_conn: Arc<Mutex<VoiceConnectionMeta>>,
+    /// Хендл активного oto-соединения (None = не подключены).
+    pub voice_conn: Arc<Mutex<Option<ActiveVoiceConnection>>>,
 }
 
 /// Цель подключения к голосовому каналу + собранные данные авторизации.
@@ -62,7 +65,7 @@ impl Default for DiscordState {
         Self {
             session: Arc::new(Mutex::new(None)),
             voice: Arc::new(Mutex::new(None)),
-            voice_conn: Arc::new(Mutex::new(VoiceConnectionMeta::default())),
+            voice_conn: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -70,7 +73,7 @@ impl Default for DiscordState {
 impl DiscordState {
     /// Загружает состояние с восстановлением сессии с диска.
     pub fn load_or_default() -> Self {
-        let mut state = Self::default();
+        let state = Self::default();
         if let Some(session) = load_session_from_disk() {
             log::info!("Session restored for {}", session.username);
             *state.session.lock().unwrap() = Some(session);
