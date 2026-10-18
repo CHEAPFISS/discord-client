@@ -375,15 +375,31 @@ function avatarUrl(m) {
 function statusOf(userId) {
   return state.presences.get(userId)?.status ?? "offline";
 }
+var ACTIVITY_ICONS = {
+  0: "\u{1F3AE}",
+  // игра
+  1: "\u{1F4E1}",
+  // стрим
+  2: "\u{1F3B5}",
+  // музыка/прослушивание
+  3: "\u{1F4FA}",
+  // просмотр
+  5: "\u{1F3C6}"
+  // соревнование
+};
 function activityLines(userId) {
   const p = state.presences.get(userId);
   if (!p || p.status === "offline") return [];
   const custom = p.activities.find((a) => a.kind === 4);
+  const others = p.activities.filter((a) => a.kind !== 4 && a.name);
   if (custom) {
     const text = [custom.emoji, custom.state].filter(Boolean).join(" ").trim();
-    if (text) return [{ text }];
+    if (text) {
+      const mark = others.length > 0 ? `${ACTIVITY_ICONS[others[0].kind] ?? "\u{1F3AE}"}+${others.length} \u2022 ` : "";
+      return [{ text: mark + text }];
+    }
   }
-  const act = p.activities.find((a) => a.kind !== 4 && a.name);
+  const act = others[0];
   if (!act) return [];
   const prefixes = {
     0: "\u0418\u0433\u0440\u0430\u0435\u0442 \u0432",
@@ -395,7 +411,7 @@ function activityLines(userId) {
   const extra = [act.details, act.state].filter(Boolean).join(" \u2014 ");
   return [
     {
-      text: `${prefixes[act.kind] ?? "\u0418\u0433\u0440\u0430\u0435\u0442 \u0432"} ${act.name}`,
+      text: `${ACTIVITY_ICONS[act.kind] ?? "\u{1F3AE}"} ${prefixes[act.kind] ?? "\u0418\u0433\u0440\u0430\u0435\u0442 \u0432"} ${act.name}`,
       title: extra ? `${act.name} \u2014 ${extra}` : void 0
     }
   ];

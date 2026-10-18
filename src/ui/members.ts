@@ -18,6 +18,17 @@ function statusOf(userId: string): string {
   return state.presences.get(userId)?.status ?? 'offline';
 }
 
+/** Иконки-маркеры по типу активности (как в списке участников Discord:
+ * игра — геймпад, музыка — нота, …). Официальной таблицы нет — Discord
+ * рисует свои глифы; ориентир — их клиент. */
+const ACTIVITY_ICONS: Record<number, string> = {
+  0: '🎮', // игра
+  1: '📡', // стрим
+  2: '🎵', // музыка/прослушивание
+  3: '📺', // просмотр
+  5: '🏆', // соревнование
+};
+
 /** Строка статуса под ником — одна, как в списке участников Discord:
  * кастом-статус перебивает остальные активности («Custom statuses override
  * other activity statuses in a server's members list»); если кастома нет —
@@ -27,12 +38,20 @@ function activityLines(userId: string): { text: string; title?: string }[] {
   if (!p || p.status === 'offline') return [];
 
   const custom = p.activities.find((a) => a.kind === 4);
+  const others = p.activities.filter((a) => a.kind !== 4 && a.name);
   if (custom) {
     const text = [custom.emoji, custom.state].filter(Boolean).join(' ').trim();
-    if (text) return [{ text }];
+    if (text) {
+      // Активности, скрытые за кастом-статусом, Discord помечает «иконка+N •».
+      const mark =
+        others.length > 0
+          ? `${ACTIVITY_ICONS[others[0].kind] ?? '🎮'}+${others.length} • `
+          : '';
+      return [{ text: mark + text }];
+    }
   }
 
-  const act = p.activities.find((a) => a.kind !== 4 && a.name);
+  const act = others[0];
   if (!act) return [];
   const prefixes: Record<number, string> = {
     0: 'Играет в',
@@ -44,7 +63,7 @@ function activityLines(userId: string): { text: string; title?: string }[] {
   const extra = [act.details, act.state].filter(Boolean).join(' — ');
   return [
     {
-      text: `${prefixes[act.kind] ?? 'Играет в'} ${act.name}`,
+      text: `${ACTIVITY_ICONS[act.kind] ?? '🎮'} ${prefixes[act.kind] ?? 'Играет в'} ${act.name}`,
       title: extra ? `${act.name} — ${extra}` : undefined,
     },
   ];
