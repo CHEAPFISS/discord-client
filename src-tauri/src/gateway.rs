@@ -1,0 +1,392 @@
+use serde_json::json;
+use futures_util::{SinkExt, StreamExt};
+use tauri::{command, AppHandle, Emitter, Manager, State};
+use tokio_tungstenite::tungstenite::Message;
+
+use discord_client::{DiscordState, GatewaySender};
+use crate::voice::connect::connect_voice;
+
+/// Защита от повторного запуска: только одно соединение за раз.
+pub(crate) static GATEWAY_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Служебный payload для rx-канала gateway: «остановись окончательно» (смена аккаунта).
+pub(crate) const GATEWAY_RELOG_MARKER: &str = "__relog__";
+/// Адрес Discord Gateway v10.
+pub(crate) const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
+
+/// Клоны Arc-полей состояния для spawned задач.
+pub(crate) fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
+    DiscordState {
+        session: state.session.clone(),
+        voice: state.voice.clone(),
+        voice_conn: state.voice_conn.clone(),
+        voice_connect_lock: state.voice_connect_lock.clone(),
+        voice_rejoin: state.voice_rejoin.clone(),
+        mic_sender: state.mic_sender.clone(),
+        self_deaf: state.self_deaf.clone(),
+    }
+}
+
+/// Смена идентичности: гасим голос (oto) и голосовой стейт под старым аккаунтом.
+pub(crate) async fn reset_voice_on_identity_change(app: &AppHandle, state: &DiscordState) {
+    let conn = {
+        let mut slot = state.voice_conn.lock().unwrap();
+        let conn = slot.conn.take();
+        slot.session_id = None;
+        slot.token = None;
+        slot.pump_spawned = false;
+        conn
+    };
+    state
+        .voice_rejoin
+        .store(0, std::sync::atomic::Ordering::SeqCst);
+    *state.voice.lock().unwrap() = None;
+    if let Some(conn) = conn {
+        let _ = conn.shutdown().await;
+    }
+    let _ = app.emit("voice_status", json!({"status": "left"}));
+}
+
+/// Перезапуск gateway-цикла под НОВЫМ токеном: маркер старому loop'у → ожидание → старт.
+pub(crate) async fn restart_gateway_for_new_token(
+    app: &AppHandle,
+    state: &DiscordState,
+    sender: &GatewaySender,
+) {
+    // 1) просим активный loop выйти
+    let marker = json!({"internal": GATEWAY_RELOG_MARKER});
+    let _ = sender.send(marker).await;
+    // 2) ждём его остановки (до ~5с; loop проверяет маркер в rx-ветке select-а)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while GATEWAY_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+        && std::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    // 3) заводим новый gateway с текущей (новой) сессией
+    let app2 = app.clone();
+    let state2 = state.clone();
+    // sender: GatewaySender не Clone — живём через app.state::<GatewaySender>()
+    tokio::spawn(async move {
+        let app3 = app2.clone();
+        let sender2 = app3.state::<GatewaySender>();
+        let _ = start_gateway_inner(app2, state2, sender2.inner()).await;
+    });
+}
+
+/// После переподключения gateway (это НОВАЯ gateway-сессия) Discord мог молча
+/// похоронить голос от старой сессии — переотправляем op 4, чтобы он выдал свежую paire.
+pub(crate) fn rekick_voice_if_joined(app: &AppHandle) {
+    let st = app.state::<DiscordState>();
+    let target = st
+        .voice
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|v| (v.guild_id.clone(), v.channel_id.clone()));
+    drop(st);
+    let Some((guild_id, channel_id)) = target else { return };
+    log::info!("Gateway: новая сессия — переотправка op 4 (канал {channel_id})");
+    let app2 = app.clone();
+    tokio::spawn(async move {
+        let sender = app2.state::<GatewaySender>();
+        let op4 = json!({
+            "op": 4,
+            "d": {
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "self_mute": false,
+                "self_deaf": false
+            }
+        });
+        if let Err(e) = sender.send(op4).await {
+            log::warn!("Gateway rekick op4: {e}");
+        }
+    });
+}
+
+/// Бесконечный цикл соединения с ретраями.
+pub(crate) async fn gateway_loop(
+    app: AppHandle,
+    token: String,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) -> Result<(), String> {
+    let mut first_pass = true;
+    loop {
+        match gateway_once(&app, &token, &mut rx).await {
+            Ok(true) => {
+                log::info!("Gateway: окончательная остановка (релогин)");
+                return Ok(());
+            }
+            Ok(_) => {
+                log::info!("Gateway: закрыто штатно, переподключение через 3с");
+                if !first_pass {
+                    rekick_voice_if_joined(&app);
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+            Err(e) => {
+                log::warn!("Gateway: ошибка {e}, переподключение через 5с");
+                let _ = app.emit(
+                    "gateway_status",
+                    json!({"status": "reconnecting", "error": e}),
+                );
+                if !first_pass {
+                    rekick_voice_if_joined(&app);
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        }
+        first_pass = false;
+    }
+}
+
+/// true = остановиться окончательно (маркер релогина), false/Err = обычный reconnect-цикл.
+async fn gateway_once(
+    app: &AppHandle,
+    token: &str,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) -> Result<bool, String> {
+    
+    let (ws, _) = tokio_tungstenite::connect_async(GATEWAY_URL)
+        .await
+        .map_err(|e| format!("connect: {e}"))?;
+
+    let (mut write, mut read) = ws.split();
+
+    // 1) жду HELLO (op 10) с heartbeat_interval
+    let mut last_seq: Option<u64> = None;
+    let heartbeat_ms = loop {
+        let msg = read.next().await.ok_or("поток закрылся")?;
+        let ping = match msg {
+            Ok(Message::Text(text)) => text,
+            Ok(Message::Ping(pay)) => {
+                write.send(Message::Pong(pay)).await.ok();
+                continue;
+            }
+            Ok(other) => {
+                log::info!("Gateway до HELLO: {other:?}");
+                continue;
+            }
+            Err(e) => return Err(format!("ws при HELLO: {e}")),
+        };
+        let v: serde_json::Value = serde_json::from_str(&ping).map_err(|e| e.to_string())?;
+        if v["op"].as_u64() == Some(10) {
+            break v["d"]["heartbeat_interval"].as_u64().unwrap_or(45000);
+        }
+    };
+
+    // 2) Identify (user-токен, без intents)
+    let identify = json!({
+        "op": 2,
+        "d": {
+            "token": token,
+            "properties": {"os": "linux", "browser": "discord-client", "device": "discord-client"},
+            "compress": false
+        }
+    });
+    write
+        .send(Message::Text(identify.to_string()))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let _ = app.emit("gateway_status", json!({"status": "connected"}));
+    log::info!("Gateway: подключен, heartbeat {heartbeat_ms}мс");
+    log::info!("Identify отправлен");
+
+    // 3) heartbeat + приём событий
+    let mut hb = tokio::time::interval(std::time::Duration::from_millis(heartbeat_ms));
+    hb.tick().await; // первый tick срабатывает сразу
+    // Контроль живости: нет HEARTBEAT ACK к следующему тику — рвём и реконнектим.
+    let mut awaiting_ack = false;
+
+    loop {
+        tokio::select! {
+            _ = hb.tick() => {
+                if awaiting_ack {
+                    log::warn!("Gateway: HEARTBEAT ACK не получен — переподключаюсь");
+                    return Err("heartbeat ack timeout".into());
+                }
+                awaiting_ack = true;
+                let hb = json!({"op": 1, "d": last_seq});
+                if write.send(Message::Text(hb.to_string())).await.is_err() {
+                    return Err("heartbeat send failed".into());
+                }
+            }
+            out = rx.recv() => {
+                match out {
+                    Some(payload) => {
+                        if payload.get("internal").and_then(|v| v.as_str()) == Some(GATEWAY_RELOG_MARKER) {
+                            log::info!("Gateway: маркер релогина — останавливаю цикл");
+                            return Ok(true);
+                        }
+                        if write.send(Message::Text(payload.to_string())).await.is_err() {
+                            return Err("outgoing send failed".into());
+                        }
+                    }
+                    None => { return Err("командный канал закрылся".into()); }
+                }
+            }
+            msg = read.next() => {
+                let msg = msg.ok_or("поток закрылся")?;
+                let text = match msg.map_err(|e| e.to_string())? {
+                    Message::Text(t) => t,
+                    Message::Ping(pay) => {
+                        log::debug!("WebSocket Ping, отвечаю Pong");
+                        if write.send(Message::Pong(pay)).await.is_err() {
+                            return Err("pong send failed".into());
+                        }
+                        continue;
+                    }
+                    Message::Pong(_) => continue,
+                    Message::Close(c) => {
+                        return Err(format!("gateway закрыл соединение: {c:?}"));
+                    }
+                    other => {
+                        log::debug!("Gateway прочее: {other:?}");
+                        continue;
+                    }
+                };
+                let v: serde_json::Value = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let op = v["op"].as_u64().unwrap_or(0);
+                let t = v["t"].as_str().unwrap_or("");
+                log::info!("Gateway recv: op={op} t={t}");
+                match op {
+                    11 => { awaiting_ack = false; /* HEARTBEAT ACK */ }
+                    7 | 9 => {
+                        return Err(format!("gateway требует реконнект (op {op})"));
+                    }
+                    _ => {}
+                }
+                if let Some(s) = v["s"].as_u64() {
+                    last_seq = Some(s);
+                }
+                let t = v["t"].as_str().unwrap_or("");
+                match t {
+                    "READY" => {
+                        let _ = app.emit("gateway_status", json!({"status": "ready"}));
+                    }
+                    "MESSAGE_CREATE" => {
+                        let d = &v["d"];
+                        if d["type"].as_u64().unwrap_or(0) == 0 {
+                            let payload = json!({
+                                "id": d["id"],
+                                "channel_id": d["channel_id"],
+                                "author": d["author"]["username"],
+                                "content": d["content"],
+                                "timestamp": d["timestamp"],
+                            });
+                            let _ = app.emit("message_create", payload);
+                        }
+                    }
+                    "VOICE_STATE_UPDATE" => {
+                        handle_voice_state(app, &v["d"]).await;
+                    }
+                    "VOICE_SERVER_UPDATE" => {
+                        handle_voice_server(app, &v["d"]).await;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// Накапливает данные голосового подключения; когда все три есть — готово.
+async fn handle_voice_state(app: &AppHandle, d: &serde_json::Value) {
+    let state: State<'_, DiscordState> = app.state();
+    let mut guard = state.voice.lock().unwrap();
+    if let Some(voice) = guard.as_mut() {
+        if d["guild_id"].as_str() == Some(voice.guild_id.as_str())
+            && d["user_id"].as_str() == Some(voice.user_id.as_str())
+        {
+            let session_id = d["session_id"].as_str().unwrap_or("").to_string();
+            if !session_id.is_empty() {
+                voice.session_id = Some(session_id);
+            }
+            // Подключаемся только когда придёт свежий token (VOICE_SERVER_UPDATE) —
+            // иначе используем протухший и получим 4014/4022.
+        }
+    }
+}
+
+async fn handle_voice_server(app: &AppHandle, d: &serde_json::Value) {
+    let state: State<'_, DiscordState> = app.state();
+    let mut guard = state.voice.lock().unwrap();
+    if let Some(voice) = guard.as_mut() {
+        if d["guild_id"].as_str() == Some(voice.guild_id.as_str()) {
+            if let Some(token) = d["token"].as_str() {
+                voice.token = Some(token.to_string());
+            }
+            if let Some(endpoint) = d["endpoint"].as_str() {
+                voice.endpoint = Some(endpoint.trim_start_matches("wss://").to_string());
+            }
+            if voice.session_id.is_some() && voice.token.is_some() && voice.endpoint.is_some() {
+                // Токен в webview не отдаём: фронт подключение не выполняет.
+                let payload = json!({
+                    "guild_id": voice.guild_id,
+                    "channel_id": voice.channel_id,
+                    "session_id": voice.session_id,
+                    "endpoint": voice.endpoint,
+                });
+                log::info!(
+                    "Голосовое подключение собрано: guild={} channel={} session={} token=<redacted>",
+                    voice.guild_id, voice.channel_id, voice.session_id.clone().unwrap_or_default()
+                );
+                let _ = app.emit("voice_channel_ready", payload);
+
+                // Авто-подключение из бэкенда: свежий токен одноразовый, тратим сразу.
+                let app2 = app.clone();
+                let discord_state = clone_state(&state);
+                let guild_ids = voice.guild_id.clone();
+                let channel_ids = voice.channel_id.clone();
+                let session_id = voice.session_id.clone().unwrap();
+                let token = voice.token.clone().unwrap();
+                let endpoint = voice.endpoint.clone().unwrap();
+                tokio::spawn(async move {
+                    if let Err(e) = connect_voice(
+                        app2, discord_state, guild_ids, channel_ids, session_id, token, endpoint,
+                    ).await {
+                        log::error!("Voice error: {e}");
+                    }
+                });
+            }
+        }
+    }
+}
+
+#[command]
+pub(crate) async fn connect_gateway(
+    app: AppHandle,
+    state: State<'_, DiscordState>,
+    sender: State<'_, GatewaySender>,
+) -> Result<String, String> {
+    start_gateway_inner(app, clone_state(&state), &sender).await
+}
+
+async fn start_gateway_inner(
+    app: AppHandle,
+    state: DiscordState,
+    sender: &GatewaySender,
+) -> Result<String, String> {
+    use std::sync::atomic::Ordering;
+
+    if GATEWAY_RUNNING.swap(true, Ordering::SeqCst) {
+        // уже запущен — считаем это успехом
+        return Ok("already-running".into());
+    }
+
+    let token = state.token().ok_or("Не залогинен")?;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *sender.tx.lock().await = Some(tx);
+
+    tokio::spawn(async move {
+        let _ = gateway_loop(app.clone(), token, rx).await;
+        GATEWAY_RUNNING.store(false, Ordering::SeqCst);
+    });
+
+    Ok("started".into())
+}
