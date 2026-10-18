@@ -26,6 +26,8 @@ pub(crate) fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
         self_deaf: state.self_deaf.clone(),
         presences: state.presences.clone(),
         voice_states: state.voice_states.clone(),
+        guild_member_counts: state.guild_member_counts.clone(),
+        member_fetch: state.member_fetch.clone(),
     }
 }
 
@@ -277,10 +279,14 @@ async fn gateway_once(
                         if let Some(guilds) = d["guilds"].as_array() {
                             let mut pres_map = state.presences.lock().unwrap();
                             let mut vs_map = state.voice_states.lock().unwrap();
+                            let mut counts = state.guild_member_counts.lock().unwrap();
                             for g in guilds {
                                 let gid = g["id"].as_str().unwrap_or("");
                                 if gid.is_empty() {
                                     continue;
+                                }
+                                if let Some(mc) = g["member_count"].as_u64() {
+                                    counts.insert(gid.to_string(), mc);
                                 }
                                 let pres_entry = pres_map.entry(gid.to_string()).or_default();
                                 if let Some(arr) = g["presences"].as_array() {
@@ -380,6 +386,65 @@ async fn gateway_once(
                                 "presence_update",
                                 json!({"guild_id": gid, "user_id": uid, "status": status}),
                             );
+                        }
+                    }
+                    // Ответ на подписку op 37: SYNC-диапазоны списка участников.
+                    "GUILD_MEMBER_LIST_UPDATE" => {
+                        let state: State<'_, DiscordState> = app.state();
+                        let d = &v["d"];
+                        let gid = d["guild_id"].as_str().unwrap_or("");
+                        if !gid.is_empty() {
+                            let slot = {
+                                let map = state.member_fetch.fetches.lock().unwrap();
+                                map.get(gid).cloned()
+                            };
+                            if let Some(slot) = slot {
+                                let mut st = slot.state.lock().unwrap();
+                                if let Some(ops) = d["ops"].as_array() {
+                                    for op in ops {
+                                        if op["op"].as_str() != Some("SYNC") {
+                                            continue;
+                                        }
+                                        if let Some(start) =
+                                            op["range"].get(0).and_then(|x| x.as_i64())
+                                        {
+                                            st.seen.insert(start);
+                                        }
+                                        if let Some(items) = op["items"].as_array() {
+                                            for it in items {
+                                                if let Some(m) = it.get("member") {
+                                                    st.members.push(m.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // presence из элементов — в общую карту статусов
+                                {
+                                    let mut pres = state.presences.lock().unwrap();
+                                    let entry = pres.entry(gid.to_string()).or_default();
+                                    for m in &st.members {
+                                        if let (Some(uid), Some(status)) = (
+                                            m["user"]["id"].as_str(),
+                                            m["presence"]["status"].as_str(),
+                                        ) {
+                                            entry.insert(uid.to_string(), status.to_string());
+                                        }
+                                    }
+                                }
+                                if !st.done
+                                    && !st.seen.is_empty()
+                                    && slot.wanted.iter().all(|s| st.seen.contains(s))
+                                {
+                                    st.done = true;
+                                    slot.notify.notify_one();
+                                }
+                                log::debug!(
+                                    "member list sync: gid={gid} членов={} seen={:?}",
+                                    st.members.len(),
+                                    st.seen
+                                );
+                            }
                         }
                     }
                     _ => {}

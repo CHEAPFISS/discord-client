@@ -6,6 +6,7 @@ use tauri::{generate_context, generate_handler, Manager};
 mod api;
 mod auth;
 mod gateway;
+mod members;
 mod voice;
 mod audio;
 
@@ -30,7 +31,7 @@ fn main() {
             // API
             api::get_guilds,
             api::get_channels,
-            api::get_guild_members,
+            members::get_guild_members,
             api::get_guild_roles,
             api::get_guild_activity,
             api::get_messages,

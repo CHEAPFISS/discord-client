@@ -131,7 +131,7 @@ var api = {
   // --- REST Discord ---
   getGuilds: () => invoke("get_guilds"),
   getChannels: (guildId) => invoke("get_channels", { guildId }),
-  getGuildMembers: (guildId) => invoke("get_guild_members", { guildId }),
+  getGuildMembers: (guildId, channelId) => invoke("get_guild_members", { guildId, channelId }),
   getGuildRoles: (guildId) => invoke("get_guild_roles", { guildId }),
   getGuildActivity: (guildId) => invoke("get_guild_activity", { guildId }),
   getMessages: (channelId) => invoke("get_messages", { channelId }),
@@ -375,7 +375,7 @@ function statusOf(userId) {
 function roleColor(color) {
   return color ? "#" + color.toString(16).padStart(6, "0") : null;
 }
-async function loadMembers(guildId) {
+async function loadMembers(guildId, channelId) {
   state.membersGuildId = guildId;
   state.membersLoading = true;
   state.members = [];
@@ -388,8 +388,9 @@ async function loadMembers(guildId) {
   loading.textContent = "\u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044E \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u043E\u0432\u2026";
   membersEl.appendChild(loading);
   try {
-    const [members, roles, activity] = await Promise.all([
-      api.getGuildMembers(guildId),
+    const members = await api.getGuildMembers(guildId, channelId);
+    if (state.membersGuildId !== guildId) return;
+    const [roles, activity] = await Promise.all([
       api.getGuildRoles(guildId),
       api.getGuildActivity(guildId)
     ]);
@@ -631,10 +632,11 @@ async function loadChannels(guild) {
   cat.className = "channel-category";
   cat.textContent = guild.name;
   channelsEl.appendChild(cat);
-  void loadMembers(guild.id);
   try {
     const channels = await api.getChannels(guild.id);
     state.channels = channels;
+    const textChannel = channels.find((c) => c.kind === 0) ?? channels[0];
+    if (textChannel) void loadMembers(guild.id, textChannel.id);
     channels.forEach((c) => {
       const div = document.createElement("div");
       div.className = `channel-item ${isVoice(c) ? "voice" : "text"}`;

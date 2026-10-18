@@ -71,7 +71,8 @@ export const api = {
   // --- REST Discord ---
   getGuilds: () => invoke<Guild[]>('get_guilds'),
   getChannels: (guildId: string) => invoke<Channel[]>('get_channels', { guildId }),
-  getGuildMembers: (guildId: string) => invoke<Member[]>('get_guild_members', { guildId }),
+  getGuildMembers: (guildId: string, channelId: string) =>
+    invoke<Member[]>('get_guild_members', { guildId, channelId }),
   getGuildRoles: (guildId: string) => invoke<Role[]>('get_guild_roles', { guildId }),
   getGuildActivity: (guildId: string) => invoke<GuildActivity>('get_guild_activity', { guildId }),
   getMessages: (channelId: string) => invoke<ChatMessage[]>('get_messages', { channelId }),

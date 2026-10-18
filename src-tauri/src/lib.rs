@@ -43,6 +43,42 @@ impl Default for VoiceSlot {
 
 // --- Состояние приложения ---
 
+/// Аккумулятор одного запроса списка участников (op 37 → GUILD_MEMBER_LIST_UPDATE).
+pub struct FetchSlot {
+    /// Начала запрошенных диапазонов (например [0, 100]).
+    pub wanted: Vec<i64>,
+    pub state: Mutex<FetchState>,
+    pub notify: tokio::sync::Notify,
+}
+
+#[derive(Default)]
+pub struct FetchState {
+    /// Объекты членов (raw JSON из элемента списка) — конвертируем при выдаче.
+    pub members: Vec<serde_json::Value>,
+    /// Начала диапазонов, по которым уже пришёл SYNC.
+    pub seen: std::collections::HashSet<i64>,
+    pub done: bool,
+}
+
+/// Реестр активных запросов + кэш готовых списков участников.
+#[derive(Default)]
+pub struct MemberFetchHub {
+    pub fetches: Mutex<HashMap<String, Arc<FetchSlot>>>,
+    /// guild_id → (когда, готовый список) — чтобы не дёргать gateway на каждый клик.
+    pub cache: Mutex<HashMap<String, (std::time::Instant, Vec<MemberInfo>)>>,
+}
+
+/// Участник сервера (общая структура для фронта).
+#[derive(Debug, Clone, Serialize)]
+pub struct MemberInfo {
+    pub user_id: String,
+    /// Отображаемое имя: ник → display_name → global_name → username.
+    pub username: String,
+    pub avatar: Option<String>,
+    pub bot: bool,
+    pub roles: Vec<String>,
+}
+
 #[derive(Clone)]
 pub struct DiscordState {
     pub session: Arc<Mutex<Option<DiscordSession>>>,
@@ -62,6 +98,10 @@ pub struct DiscordState {
     pub presences: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
     /// Кто в каком голосовом канале: guild_id → user_id → channel_id.
     pub voice_states: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
+    /// Число участников сервера (из READY) — для расчёта диапазонов списка.
+    pub guild_member_counts: Arc<Mutex<HashMap<String, u64>>>,
+    /// Запросы/кэш списка участников (op 37).
+    pub member_fetch: Arc<MemberFetchHub>,
 }
 
 /// Цель подключения к голосовому каналу + собранные данные авторизации.
@@ -94,6 +134,8 @@ impl Default for DiscordState {
             self_deaf: Arc::new(AtomicBool::new(false)),
             presences: Arc::new(Mutex::new(HashMap::new())),
             voice_states: Arc::new(Mutex::new(HashMap::new())),
+            guild_member_counts: Arc::new(Mutex::new(HashMap::new())),
+            member_fetch: Arc::new(MemberFetchHub::default()),
         }
     }
 }

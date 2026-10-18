@@ -33,19 +33,6 @@ pub struct ChatMessage {
     pub timestamp: String,
 }
 
-/// Участник сервера (для колонки участников).
-#[derive(Debug, Serialize)]
-pub struct Member {
-    pub user_id: String,
-    /// Отображаемое имя: ник на сервере → global_name → username.
-    pub username: String,
-    /// Хэш аватарки для CDN Discord (None — показываем букву).
-    pub avatar: Option<String>,
-    pub bot: bool,
-    /// ID ролей участника.
-    pub roles: Vec<String>,
-}
-
 /// Роль сервера (для группировки участников по ролям).
 #[derive(Debug, Serialize)]
 pub struct Role {
@@ -157,50 +144,6 @@ pub async fn get_channels(
         return Err(api_error(&resp));
     }
     Ok(channels)
-}
-
-#[command]
-pub async fn get_guild_members(
-    state: State<'_, DiscordState>,
-    guild_id: String,
-) -> Result<Vec<Member>, String> {
-    let token = state.token().ok_or("Не залогинен")?;
-    let resp = discord_get(
-        &token,
-        &format!("{API_BASE}/guilds/{guild_id}/members?limit=1000"),
-    )
-    .await?;
-
-    let mut out = Vec::new();
-    if let Some(arr) = resp.as_array() {
-        for m in arr {
-            let u = &m["user"];
-            let username = m["nick"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .or_else(|| u["global_name"].as_str())
-                .or_else(|| u["username"].as_str())
-                .unwrap_or("")
-                .to_string();
-            out.push(Member {
-                user_id: u["id"].as_str().unwrap_or("").to_string(),
-                username,
-                avatar: u["avatar"].as_str().map(String::from),
-                bot: u["bot"].as_bool().unwrap_or(false),
-                roles: m["roles"]
-                    .as_array()
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|r| r.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-            });
-        }
-    } else {
-        return Err(api_error(&resp));
-    }
-    Ok(out)
 }
 
 #[command]

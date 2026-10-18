@@ -23,12 +23,12 @@ export async function loadChannels(guild: Guild): Promise<void> {
   cat.textContent = guild.name;
   channelsEl.appendChild(cat);
 
-  // Участники грузятся параллельно с каналами.
-  void loadMembers(guild.id);
-
   try {
     const channels = await api.getChannels(guild.id);
     state.channels = channels;
+    // Участников тянем после каналов: нужен id текстового канала для подписки.
+    const textChannel = channels.find((c) => c.kind === 0) ?? channels[0];
+    if (textChannel) void loadMembers(guild.id, textChannel.id);
     channels.forEach((c) => {
       const div = document.createElement('div');
       div.className = `channel-item ${isVoice(c) ? 'voice' : 'text'}`;

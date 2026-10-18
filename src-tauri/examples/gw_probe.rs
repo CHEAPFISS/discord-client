@@ -122,19 +122,127 @@ async fn main() {
                             println!("[{mode}] presences[0]: {cut}");
                         }
                     }
-                    if t == "GUILD_CREATE" {
-                        guild_create_seen += 1;
-                        let d = &v["d"];
-                        let pres = d["presences"].as_array().map(|a| a.len()).unwrap_or(0);
-                        let mem = d["members"].as_array().map(|a| a.len()).unwrap_or(0);
-                        let vs = d["voice_states"].as_array().map(|a| a.len()).unwrap_or(0);
-                        println!(
-                            "[{mode}] GUILD_CREATE {}: presences={pres} members={mem} voice_states={vs}",
-                            d["id"]
-                        );
-                        if guild_create_sample.is_none() {
-                            guild_create_sample = Some(d.clone());
+                    if t == "READY" && mode == "chunks" {
+                        // шлём op 8 на каждую гильдию: query="", limit=0 (все), presences=true
+                        if let Some(arr) = v["d"]["guilds"].as_array() {
+                            for g in arr {
+                                let gid = g["id"].clone();
+                                let payload = json!({
+                                    "op": 8,
+                                    "d": {
+                                        "guild_id": [gid],
+                                        "query": "",
+                                        "limit": 0,
+                                        "presences": true
+                                    }
+                                });
+                                println!("[{mode}] op8 → {payload}");
+                                tx.send(Message::Text(payload.to_string())).await.unwrap();
+                            }
                         }
+                    }
+                    if t == "GUILD_MEMBERS_CHUNK" {
+                        let d = &v["d"];
+                        let mem = d["members"].as_array().map(|a| a.len()).unwrap_or(0);
+                        let pres = d["presences"].as_array().map(|a| a.len()).unwrap_or(0);
+                        println!(
+                            "[{mode}] CHUNK guild={} members={mem} presences={pres} index={} count={}",
+                            d["guild_id"],
+                            d["chunk_index"],
+                            d["chunk_count"]
+                        );
+                        if let Some(m0) = d["members"].get(0) {
+                            let s = m0.to_string();
+                            let cut: String = s.chars().take(350).collect();
+                            println!("[{mode}]   members[0]: {cut}");
+                        }
+                    }
+                    if t == "READY" && mode == "mlist" {
+                        // подписка на список участников (op 37): typing + channels ranges
+                        if let Some(arr) = v["d"]["guilds"].as_array() {
+                            for g in arr {
+                                let gid = g["id"].as_str().unwrap_or("").to_string();
+                                let mc = g["member_count"].as_u64().unwrap_or(0);
+                                println!("[{mode}] guild {gid} member_count={mc}");
+                                if mc == 0 || mc > 400 {
+                                    continue;
+                                }
+                                let ch = g["channels"]
+                                    .as_array()
+                                    .and_then(|a| a.iter().find(|c| c["type"].as_u64() == Some(0)));
+                                let Some(ch) = ch else { continue };
+                                let chid = ch["id"].as_str().unwrap_or("").to_string();
+                                let mut ranges = vec![];
+                                let n = mc.div_ceil(100).max(1);
+                                for i in 0..n {
+                                    ranges.push(json!([i * 100, i * 100 + 99]));
+                                }
+                                let payload = json!({
+                                    "op": 37,
+                                    "d": {"subscriptions": {
+                                        gid.clone(): {
+                                            "typing": true,
+                                            "channels": { chid.clone(): ranges }
+                                        }
+                                    }}
+                                });
+                                println!("[{mode}] op37 → {payload}");
+                                tx.send(Message::Text(payload.to_string())).await.unwrap();
+                            }
+                        }
+                    }
+                    if t == "GUILD_MEMBER_LIST_UPDATE" {
+                        let d = &v["d"];
+                        let mut items_total = 0usize;
+                        let mut ops_desc = vec![];
+                        if let Some(ops) = d["ops"].as_array() {
+                            for opd in ops {
+                                let name = opd["op"].as_str().unwrap_or("?");
+                                let items = opd["items"].as_array().map(|a| a.len()).unwrap_or(0);
+                                if name == "SYNC" {
+                                    items_total += items;
+                                }
+                                ops_desc.push(format!(
+                                    "{name}{} items={items}",
+                                    opd["range"].as_array().map(|r| format!("{r:?}")).unwrap_or_default()
+                                ));
+                            }
+                        }
+                        println!(
+                            "[{mode}] MLIST guild={} member_count={} online_count={} items(SYNC)={items_total} ops: {}",
+                            d["guild_id"],
+                            d["member_count"],
+                            d["online_count"],
+                            ops_desc.join(" | ")
+                        );
+                        if let Some(o0) = d["ops"].as_array().and_then(|a| a.first()) {
+                            if let Some(items) = o0["items"].as_array() {
+                                // ищем первый настоящий member-элемент (пропускаем group)
+                                let m = items.iter().find(|it| it.get("member").is_some());
+                                if let Some(item0) = m {
+                                    let s = item0.to_string();
+                                    let cut: String = s.chars().take(500).collect();
+                                    println!("[{mode}]   member item: {cut}");
+                                    let has_pres = item0["member"].get("presence").is_some();
+                                    let with_pres = items
+                                        .iter()
+                                        .filter(|it| it["member"].get("presence").is_some())
+                                        .count();
+                                    println!(
+                                        "[{mode}]   presence у member-элементов: {with_pres} (у первого: {has_pres})"
+                                    );
+                                }
+                            }
+                        }
+                        let groups: Vec<String> = d["groups"]
+                            .as_array()
+                            .map(|a| {
+                                a.iter()
+                                    .map(|g| format!("{}:{}", g["id"], g["count"]))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        println!("[{mode}]   groups: {groups:?}");
                     }
                 }
             }

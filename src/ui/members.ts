@@ -25,7 +25,7 @@ function roleColor(color: number): string | null {
 }
 
 /** Загрузка участников/ролей/активности при выборе сервера. */
-export async function loadMembers(guildId: string): Promise<void> {
+export async function loadMembers(guildId: string, channelId: string): Promise<void> {
   state.membersGuildId = guildId;
   state.membersLoading = true;
   state.members = [];
@@ -39,12 +39,15 @@ export async function loadMembers(guildId: string): Promise<void> {
   membersEl.appendChild(loading);
 
   try {
-    const [members, roles, activity] = await Promise.all([
-      api.getGuildMembers(guildId),
+    // Список участников приходит через gateway (op 37); он же засеял
+    // свежие presence-статусы — активность читаем ПОСЛЕ него.
+    const members = await api.getGuildMembers(guildId, channelId);
+    // Пока грузились — могли переключить сервер.
+    if (state.membersGuildId !== guildId) return;
+    const [roles, activity] = await Promise.all([
       api.getGuildRoles(guildId),
       api.getGuildActivity(guildId),
     ]);
-    // Пока грузились — могли переключить сервер.
     if (state.membersGuildId !== guildId) return;
     state.members = members;
     state.roles = roles;
