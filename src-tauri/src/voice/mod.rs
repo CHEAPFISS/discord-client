@@ -128,19 +128,44 @@ pub(crate) async fn leave_voice_channel(
     Ok(())
 }
 
+/// Мьют микрофона: серверное состояние op 4 (видно другим клиентам, как у deafen)
+/// + локальная пауза захвата.
 #[command]
 pub(crate) async fn set_self_mute(
+    app: AppHandle,
     state: State<'_, DiscordState>,
     muted: bool,
 ) -> Result<(), String> {
+    // Локальная пауза захвата (если микрофон-поток есть).
     let sender = state.mic_sender.lock().unwrap().clone();
-    let Some(sender) = sender else {
-        return Ok(()); // не в голосовом канале
-    };
-    sender
-        .set_paused(muted)
-        .await
-        .map_err(|e| format!("mute: {e}"))?;
+    if let Some(sender) = sender {
+        if let Err(e) = sender.set_paused(muted).await {
+            log::warn!("Mute (локальная пауза): {e}");
+        }
+    }
+
+    // op 4 — сообщаем Discord; текущий self_deaf сохраняем, чтобы не сбросить глухоту.
+    let deaf = state.self_deaf.load(Ordering::SeqCst);
+    let target = state
+        .voice
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|v| (v.guild_id.clone(), v.channel_id.clone()));
+    if let Some((guild_id, channel_id)) = target {
+        let op4 = json!({
+            "op": 4,
+            "d": {
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "self_mute": muted,
+                "self_deaf": deaf
+            }
+        });
+        if let Err(e) = app.state::<GatewaySender>().send(op4).await {
+            log::warn!("Mute op4: {e}");
+        }
+    }
     Ok(())
 }
 
