@@ -466,7 +466,22 @@ function renderMessage(msg, opts = {}) {
   let content = msg.content;
   for (const e of msg.embeds) {
     if (e.kind !== "gifv" || !e.url) continue;
-    content = content.split("\n").filter((line) => line.trim() !== e.url).join("\n");
+    const gifUrl = e.url;
+    const hostname = (u) => {
+      try {
+        return new URL(u).hostname.replace(/^www\./, "");
+      } catch {
+        return null;
+      }
+    };
+    const gifHost = hostname(gifUrl);
+    content = content.split("\n").filter((line) => {
+      const t = line.trim();
+      if (!t) return false;
+      if (t.includes(gifUrl)) return false;
+      if (/^https?:\/\/\S+$/.test(t) && gifHost && hostname(t) === gifHost) return false;
+      return true;
+    }).join("\n");
   }
   bubble.innerHTML = `
       <div class="header">

@@ -228,13 +228,29 @@ function renderMessage(msg: ChatMessage, opts: { live?: boolean } = {}): void {
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
   // Ссылки, породившие gifv-эмбед, из текста убираем — остаётся только гифка
-  // (как у официального клиента).
+  // (как у официального клиента). Не строгое равенство, а «url внутри строки»
+  // (невидимые символы/хвосты не мешают) + голая ссылка на тот же домен.
   let content = msg.content;
   for (const e of msg.embeds) {
     if (e.kind !== 'gifv' || !e.url) continue;
+    const gifUrl = e.url;
+    const hostname = (u: string): string | null => {
+      try {
+        return new URL(u).hostname.replace(/^www\./, '');
+      } catch {
+        return null;
+      }
+    };
+    const gifHost = hostname(gifUrl);
     content = content
       .split('\n')
-      .filter((line) => line.trim() !== e.url)
+      .filter((line) => {
+        const t = line.trim();
+        if (!t) return false;
+        if (t.includes(gifUrl)) return false;
+        if (/^https?:\/\/\S+$/.test(t) && gifHost && hostname(t) === gifHost) return false;
+        return true;
+      })
       .join('\n');
   }
   bubble.innerHTML = `
