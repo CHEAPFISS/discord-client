@@ -119,34 +119,6 @@ impl DiscordState {
     }
 }
 
-// --- Типы для команд ---
-
-#[derive(Debug, Serialize)]
-pub struct Guild {
-    pub id: String,
-    pub name: String,
-    pub icon: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct Channel {
-    pub id: String,
-    pub guild_id: String,
-    pub name: String,
-    // type — имя в API Discord (только при разборе ответов); наружу отдаём kind
-    #[serde(rename(deserialize = "type"))]
-    pub kind: u8,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ChatMessage {
-    pub id: String,
-    pub channel_id: String,
-    pub author: String,
-    pub content: String,
-    pub timestamp: String,
-}
-
 // --- Конфиг OAuth (client_id / client_secret) ---
 
 #[derive(Debug, Clone, Deserialize)]

@@ -20,7 +20,6 @@ pub struct Channel {
     pub guild_id: String,
     pub name: String,
     /// `type` из API Discord (0 текст, 2 голос и т.д.); наружу отдаём как `kind`
-    #[serde(rename(deserialize = "type"))]
     pub kind: u8,
 }
 
@@ -117,7 +116,7 @@ pub async fn get_channels(
                 id: c["id"].as_str().unwrap_or("").to_string(),
                 guild_id: guild_id.clone(),
                 name: c["name"].as_str().unwrap_or("").to_string(),
-                kind: c["kind"].as_u64().unwrap_or(0) as u8,
+                kind: c["type"].as_u64().unwrap_or(0) as u8,
             });
         }
     } else {
