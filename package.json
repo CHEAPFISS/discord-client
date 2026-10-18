@@ -7,10 +7,15 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "fe:build": "esbuild src/app.ts --bundle --format=esm --target=es2022 --outfile=src/app.js",
+    "fe:watch": "esbuild src/app.ts --bundle --format=esm --target=es2022 --outfile=src/app.js --watch",
+    "fe:check": "tsc --noEmit"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.12.3"
+    "@tauri-apps/cli": "^2.12.3",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@tauri-apps/api": "^2"

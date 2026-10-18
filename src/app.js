@@ -1,264 +1,273 @@
-// Discord Client — фронтенд (Tauri + vanilla JS).
-// Общается с бэкендом через window.__TAURI__ (withGlobalTauri: true в tauri.conf.json).
-
-const invoke = window.__TAURI__?.core?.invoke;
-const listen = window.__TAURI__?.event?.listen;
-
-const toast = document.getElementById('errorToast');
-const statusDot = document.getElementById('statusDot');
-const statusText = document.getElementById('statusText');
-
-function showError(msg) {
-  if (!toast) return alert(msg);
-  toast.textContent = msg;
-  toast.style.display = 'block';
-  setTimeout(() => { toast.style.display = 'none'; }, 8000);
-  toast.onclick = () => { toast.style.display = 'none'; };
+// node_modules/@tauri-apps/api/external/tslib/tslib.es6.js
+function __classPrivateFieldGet(receiver, state2, kind, f) {
+  if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a getter");
+  if (typeof state2 === "function" ? receiver !== state2 || !f : !state2.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
+  return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state2.get(receiver);
+}
+function __classPrivateFieldSet(receiver, state2, value, kind, f) {
+  if (kind === "m") throw new TypeError("Private method is not writable");
+  if (kind === "a" && !f) throw new TypeError("Private accessor was defined without a setter");
+  if (typeof state2 === "function" ? receiver !== state2 || !f : !state2.has(receiver)) throw new TypeError("Cannot write private member to an object whose class did not declare it");
+  return kind === "a" ? f.call(receiver, value) : f ? f.value = value : state2.set(receiver, value), value;
 }
 
-function setGatewayStatus(status, error) {
-  if (!statusDot || !statusText) return;
-  statusDot.className = 'status-dot';
-  switch (status) {
-    case 'connected':
-    case 'ready':
-      statusDot.classList.add('connected');
-      statusText.textContent = 'Подключено к Discord';
-      statusText.style.color = '#dcddde';
-      break;
-    case 'reconnecting':
-      statusDot.classList.add('connecting');
-      statusText.textContent = error ? 'Переподключение… (' + error + ')' : 'Переподключение…';
-      statusText.style.color = '#faa61a';
-      break;
-    default:
-      statusDot.classList.add('disconnected');
-      statusText.textContent = 'Нет соединения';
-      statusText.style.color = '#8e9297';
-  }
+// node_modules/@tauri-apps/api/core.js
+var _Channel_instances;
+var _Channel_onmessage;
+var _Channel_nextMessageIndex;
+var _Channel_pendingMessages;
+var _Channel_messageEndIndex;
+var _Channel_deliver;
+var _Resource_rid;
+var SERIALIZE_TO_IPC_FN = "__TAURI_TO_IPC_KEY__";
+function transformCallback(callback, once = false) {
+  return window.__TAURI_INTERNALS__.transformCallback(callback, once);
 }
-
-// --- DOM ---
-const loginScreen = document.getElementById('login');
-const appEl = document.getElementById('app');
-const loginBtn = document.getElementById('loginBtn');
-const loginStatus = document.getElementById('loginStatus');
-const serversEl = document.getElementById('servers');
-const channelsEl = document.getElementById('channels');
-const messagesEl = document.getElementById('messages');
-const chatHeader = document.getElementById('chatHeader');
-const messageInput = document.getElementById('messageInput');
-const usernameEl = document.getElementById('username');
-const avatarEl = document.getElementById('avatar');
-const userAreaNameEl = document.getElementById('userAreaName');
-const voiceCall = document.getElementById('voiceCall');
-const voiceChannelName = document.getElementById('voiceChannelName');
-const hangupBtn = document.getElementById('hangupBtn');
-const logoutBtn = document.getElementById('logoutBtn');
-const statusEl = document.getElementById('voiceStatus');
-
-let currentGuildId = null;
-let currentChannelId = null;
-let currentVoiceChannelId = null;
-const unread = new Map();   // channelId => количество непрочитанных
-const channelEls = {};      // channelId => DOM-элемент канала
-
-// --- Экран входа ---
-
-function showApp(username) {
-  loginScreen.style.display = 'none';
-  appEl.style.display = 'flex';
-  usernameEl.textContent = username;
-  userAreaNameEl.textContent = username;
-  avatarEl.textContent = username.charAt(0).toUpperCase();
-  loadGuilds();
-}
-
-async function tryRestoreSession() {
-  try {
-    const me = await invoke('get_me');
-    showApp(me.username);
-    // запускаем Gateway WebSocket для живых сообщений
-    invoke('connect_gateway').catch(e => console.warn('gateway:', e));
-  } catch (e) {
-    // не залогинен — остаёмся на экране входа
-  }
-}
-
-loginBtn.addEventListener('click', async () => {
-  loginBtn.disabled = true;
-  loginStatus.textContent = 'Открываю Discord в браузере…';
-  try {
-    const res = await invoke('start_login');
-    showApp(res.username);
-    invoke('connect_gateway').catch(e => console.warn('gateway:', e));
-  } catch (e) {
-    loginStatus.textContent = String(e);
-    showError(String(e));
-  } finally {
-    loginBtn.disabled = false;
-  }
-});
-
-const tokenInput = document.getElementById('tokenInput');
-const tokenBtn = document.getElementById('tokenBtn');
-
-tokenBtn.addEventListener('click', async () => {
-  const token = tokenInput.value.trim();
-  if (!token) return showError('Вставь токен в поле');
-  tokenBtn.disabled = true;
-  loginStatus.textContent = 'Проверяю токен…';
-  try {
-    const res = await invoke('login_with_token', { token });
-    tokenInput.value = '';
-    showApp(res.username);
-    invoke('connect_gateway').catch(e => console.warn('gateway:', e));
-  } catch (e) {
-    loginStatus.textContent = String(e);
-    showError(String(e));
-  } finally {
-    tokenBtn.disabled = false;
-  }
-});
-
-// --- Серверы / каналы ---
-
-function serverAvatar(guild) {
-  if (guild.icon) {
-    return `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=64`;
-  }
-  return null;
-}
-
-async function loadGuilds() {
-  try {
-    const guilds = await invoke('get_guilds');
-    serversEl.innerHTML = '';
-    if (!guilds || guilds.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'empty-servers';
-      empty.textContent = 'Серверы не найдены';
-      serversEl.appendChild(empty);
-      return;
-    }
-    guilds.forEach(g => {
-      const div = document.createElement('div');
-      div.className = 'server-item';
-      div.title = g.name;
-      const imgUrl = serverAvatar(g);
-      if (imgUrl) {
-        const img = document.createElement('img');
-        img.src = imgUrl;
-        img.alt = g.name;
-        img.onerror = () => {
-          div.textContent = g.name.charAt(0).toUpperCase();
-          div.classList.add('server-letter');
-        };
-        div.appendChild(img);
-      } else {
-        div.textContent = g.name.charAt(0).toUpperCase();
-        div.classList.add('server-letter');
+var Channel = class {
+  constructor(onmessage) {
+    _Channel_instances.add(this);
+    _Channel_onmessage.set(this, void 0);
+    _Channel_nextMessageIndex.set(this, 0);
+    _Channel_pendingMessages.set(this, []);
+    _Channel_messageEndIndex.set(this, void 0);
+    __classPrivateFieldSet(this, _Channel_onmessage, onmessage || (() => {
+    }), "f");
+    this.id = transformCallback((rawMessage) => {
+      const index = rawMessage.index;
+      if ("end" in rawMessage) {
+        if (index == __classPrivateFieldGet(this, _Channel_nextMessageIndex, "f")) {
+          this.cleanupCallback();
+        } else {
+          __classPrivateFieldSet(this, _Channel_messageEndIndex, index, "f");
+        }
+        return;
       }
-      div.onclick = () => {
-        document.querySelectorAll('.server-item').forEach(el => el.classList.remove('active'));
-        div.classList.add('active');
-        loadChannels(g);
-      };
-      serversEl.appendChild(div);
+      const message = rawMessage.message;
+      if (index == __classPrivateFieldGet(this, _Channel_nextMessageIndex, "f")) {
+        __classPrivateFieldGet(this, _Channel_instances, "m", _Channel_deliver).call(this, message);
+        __classPrivateFieldSet(this, _Channel_nextMessageIndex, __classPrivateFieldGet(this, _Channel_nextMessageIndex, "f") + 1, "f");
+        while (__classPrivateFieldGet(this, _Channel_nextMessageIndex, "f") in __classPrivateFieldGet(this, _Channel_pendingMessages, "f")) {
+          const message2 = __classPrivateFieldGet(this, _Channel_pendingMessages, "f")[__classPrivateFieldGet(this, _Channel_nextMessageIndex, "f")];
+          __classPrivateFieldGet(this, _Channel_instances, "m", _Channel_deliver).call(this, message2);
+          delete __classPrivateFieldGet(this, _Channel_pendingMessages, "f")[__classPrivateFieldGet(this, _Channel_nextMessageIndex, "f")];
+          __classPrivateFieldSet(this, _Channel_nextMessageIndex, __classPrivateFieldGet(this, _Channel_nextMessageIndex, "f") + 1, "f");
+        }
+        if (__classPrivateFieldGet(this, _Channel_nextMessageIndex, "f") === __classPrivateFieldGet(this, _Channel_messageEndIndex, "f")) {
+          this.cleanupCallback();
+        }
+      } else {
+        __classPrivateFieldGet(this, _Channel_pendingMessages, "f")[index] = message;
+      }
     });
-  } catch (e) {
-    showError('Не удалось загрузить серверы: ' + e);
   }
+  cleanupCallback() {
+    window.__TAURI_INTERNALS__.unregisterCallback(this.id);
+  }
+  /**
+   * The handler called for every message sent by the Rust side of this channel.
+   *
+   * Assigning a new handler replaces the previous one; messages that arrived
+   * before a handler was set are not replayed, so set it (or pass it to the
+   * constructor) before sending the channel to the backend.
+   */
+  set onmessage(handler) {
+    __classPrivateFieldSet(this, _Channel_onmessage, handler, "f");
+  }
+  get onmessage() {
+    return __classPrivateFieldGet(this, _Channel_onmessage, "f");
+  }
+  [(_Channel_onmessage = /* @__PURE__ */ new WeakMap(), _Channel_nextMessageIndex = /* @__PURE__ */ new WeakMap(), _Channel_pendingMessages = /* @__PURE__ */ new WeakMap(), _Channel_messageEndIndex = /* @__PURE__ */ new WeakMap(), _Channel_instances = /* @__PURE__ */ new WeakSet(), _Channel_deliver = function _Channel_deliver2(message) {
+    try {
+      __classPrivateFieldGet(this, _Channel_onmessage, "f").call(this, message);
+    } catch (error) {
+      queueMicrotask(() => {
+        throw error;
+      });
+    }
+  }, SERIALIZE_TO_IPC_FN)]() {
+    return `__CHANNEL__:${this.id}`;
+  }
+  toJSON() {
+    return this[SERIALIZE_TO_IPC_FN]();
+  }
+};
+async function invoke(cmd, args = {}, options) {
+  return window.__TAURI_INTERNALS__.invoke(cmd, args, options);
+}
+var Resource = class {
+  get rid() {
+    return __classPrivateFieldGet(this, _Resource_rid, "f");
+  }
+  constructor(rid) {
+    _Resource_rid.set(this, void 0);
+    __classPrivateFieldSet(this, _Resource_rid, rid, "f");
+  }
+  /**
+   * Destroys and cleans up this resource from memory.
+   * **You should not call any method on this object anymore and should drop any reference to it.**
+   *
+   * @remarks Uses the `core:resources:allow-close` permission, which is part of
+   * the `core:resources:default` permission set enabled by default.
+   */
+  async close() {
+    return invoke("plugin:resources|close", {
+      rid: this.rid
+    });
+  }
+  async [(_Resource_rid = /* @__PURE__ */ new WeakMap(), Symbol.asyncDispose)]() {
+    await this.close();
+  }
+};
+
+// src/api.ts
+var api = {
+  // --- Вход ---
+  getMe: () => invoke("get_me"),
+  startLogin: () => invoke("start_login"),
+  loginWithToken: (token) => invoke("login_with_token", { token }),
+  logout: () => invoke("logout"),
+  // --- Gateway ---
+  connectGateway: () => invoke("connect_gateway"),
+  // --- REST Discord ---
+  getGuilds: () => invoke("get_guilds"),
+  getChannels: (guildId) => invoke("get_channels", { guildId }),
+  getMessages: (channelId) => invoke("get_messages", { channelId }),
+  sendMessage: (channelId, content) => invoke("send_message", { channelId, content }),
+  // --- Голос ---
+  joinVoice: (channelId, guildId) => invoke("join_voice_channel", { channelId, guildId }),
+  leaveVoice: () => invoke("leave_voice_channel"),
+  setSelfMute: (muted) => invoke("set_self_mute", { muted }),
+  setSelfDeaf: (deaf) => invoke("set_self_deaf", { deaf })
+};
+
+// src/dom.ts
+function el(id) {
+  const node = document.getElementById(id);
+  if (!node) throw new Error(`\u042D\u043B\u0435\u043C\u0435\u043D\u0442 #${id} \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D \u0432 index.html`);
+  return node;
 }
 
+// node_modules/@tauri-apps/api/event.js
+var TauriEvent;
+(function(TauriEvent2) {
+  TauriEvent2["WINDOW_RESIZED"] = "tauri://resize";
+  TauriEvent2["WINDOW_MOVED"] = "tauri://move";
+  TauriEvent2["WINDOW_CLOSE_REQUESTED"] = "tauri://close-requested";
+  TauriEvent2["WINDOW_DESTROYED"] = "tauri://destroyed";
+  TauriEvent2["WINDOW_FOCUS"] = "tauri://focus";
+  TauriEvent2["WINDOW_BLUR"] = "tauri://blur";
+  TauriEvent2["WINDOW_SCALE_FACTOR_CHANGED"] = "tauri://scale-change";
+  TauriEvent2["WINDOW_THEME_CHANGED"] = "tauri://theme-changed";
+  TauriEvent2["WINDOW_CREATED"] = "tauri://window-created";
+  TauriEvent2["WINDOW_SUSPENDED"] = "tauri://suspended";
+  TauriEvent2["WINDOW_RESUMED"] = "tauri://resumed";
+  TauriEvent2["WEBVIEW_CREATED"] = "tauri://webview-created";
+  TauriEvent2["DRAG_ENTER"] = "tauri://drag-enter";
+  TauriEvent2["DRAG_OVER"] = "tauri://drag-over";
+  TauriEvent2["DRAG_DROP"] = "tauri://drag-drop";
+  TauriEvent2["DRAG_LEAVE"] = "tauri://drag-leave";
+})(TauriEvent || (TauriEvent = {}));
+async function _unlisten(event, eventId) {
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener(event, eventId);
+  await invoke("plugin:event|unlisten", {
+    event,
+    eventId
+  });
+}
+async function listen(event, handler, options) {
+  var _a;
+  const target = typeof (options === null || options === void 0 ? void 0 : options.target) === "string" ? { kind: "AnyLabel", label: options.target } : (_a = options === null || options === void 0 ? void 0 : options.target) !== null && _a !== void 0 ? _a : { kind: "Any" };
+  return invoke("plugin:event|listen", {
+    event,
+    target,
+    handler: transformCallback(handler)
+  }).then((eventId) => {
+    return async () => _unlisten(event, eventId);
+  });
+}
+
+// src/events.ts
+function subscribe(event, cb) {
+  listen(event, (e) => cb(e.payload)).catch((err) => {
+    console.warn(`listen(${event}):`, err);
+  });
+}
+var onMessageCreate = (cb) => subscribe("message_create", cb);
+var onGatewayStatus = (cb) => subscribe("gateway_status", cb);
+var onVoiceStatus = (cb) => subscribe("voice_status", cb);
+var onVoiceChannelReady = (cb) => subscribe("voice_channel_ready", cb);
+
+// src/state.ts
+var state = {
+  /** Открытый сервер (нужен для join_voice_channel). */
+  currentGuildId: null,
+  /** Открытый текстовый канал. */
+  currentChannelId: null,
+  /** Активный голосовой канал (запоминаем для UI). */
+  currentVoiceChannelId: null,
+  /** Локальные флаги кнопок голосовой панели. */
+  micMuted: false,
+  deafened: false,
+  /** channelId → количество непрочитанных. */
+  unread: /* @__PURE__ */ new Map(),
+  /** channelId → DOM-элемент канала (для бейджей). */
+  channelEls: {}
+};
+
+// src/ui/toast.ts
+function showError(msg) {
+  const text = String(msg);
+  const toast = document.getElementById("errorToast");
+  if (!toast) {
+    alert(text);
+    return;
+  }
+  toast.textContent = text;
+  toast.style.display = "block";
+  setTimeout(() => {
+    toast.style.display = "none";
+  }, 8e3);
+  toast.onclick = () => {
+    toast.style.display = "none";
+  };
+}
+
+// src/ui/unread.ts
 function updateBadge(channelId) {
-  const el = channelEls[channelId];
-  if (!el) return;
-  const badge = el.querySelector('.unread-badge');
-  const n = unread.get(channelId) || 0;
+  const channelEl = state.channelEls[channelId];
+  if (!channelEl) return;
+  const badge = channelEl.querySelector(".unread-badge");
+  if (!badge) return;
+  const n = state.unread.get(channelId) || 0;
   if (n > 0) {
-    badge.textContent = n > 9 ? '9+' : String(n);
-    badge.classList.add('visible');
+    badge.textContent = n > 9 ? "9+" : String(n);
+    badge.classList.add("visible");
   } else {
-    badge.classList.remove('visible');
+    badge.classList.remove("visible");
   }
 }
 
-async function loadChannels(guild) {
-  currentGuildId = guild.id;
-  channelsEl.innerHTML = '';
-  const cat = document.createElement('div');
-  cat.className = 'channel-category';
-  cat.textContent = guild.name;
-  channelsEl.appendChild(cat);
-
-  try {
-    const channels = await invoke('get_channels', { guildId: guild.id });
-    channels.forEach(c => {
-      const div = document.createElement('div');
-      div.className = `channel-item ${(c.kind === 2 || c.kind === 13) ? 'voice' : 'text'}`;
-      div.dataset.channelId = c.id;
-      const nameSpan = document.createElement('span');
-      nameSpan.className = 'channel-name';
-      nameSpan.textContent = c.name;
-      const badge = document.createElement('span');
-      badge.className = 'unread-badge';
-      div.appendChild(nameSpan);
-      div.appendChild(badge);
-      channelEls[c.id] = div;
-      updateBadge(c.id);
-
-      div.onclick = () => {
-        document.querySelectorAll('.channel-item').forEach(el => el.classList.remove('active'));
-        div.classList.add('active');
-        // сбрасываем непрочитанное для этого канала
-        unread.delete(c.id);
-        updateBadge(c.id);
-        if (c.kind === 2 || c.kind === 13) joinVoice(c);
-        else openTextChannel(c);
-      };
-      channelsEl.appendChild(div);
-    });
-  } catch (e) {
-    showError('Не удалось загрузить каналы: ' + e);
-  }
-}
-
-// --- Сообщения ---
-
+// src/ui/chat.ts
 function fmtTime(ts) {
-  if (!ts) return '';
+  if (!ts) return "";
   const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
-
 function escapeHtml(text) {
-  const div = document.createElement('div');
+  const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
 }
-
-function clearMessages() {
-  messagesEl.innerHTML = '';
-  const empty = document.createElement('div');
-  empty.className = 'messages-empty';
-  empty.textContent = 'Сообщений пока нет';
-  messagesEl.appendChild(empty);
-}
-
 function renderContent(rawHtml) {
-  // Упоминания <@id> → красивая метка @user (без API-разрешения имён)
   return rawHtml.replace(/&lt;@(!?\d+)&gt;/g, '<span class="mention">@$1</span>');
 }
-
-function renderMessage(msg, { live = false } = {}) {
-  // Убираем заглушку "пусто" при первом сообщении
-  const existingEmpty = messagesEl.querySelector('.messages-empty');
+function renderMessage(msg, opts = {}) {
+  const messagesEl = el("messages");
+  const existingEmpty = messagesEl.querySelector(".messages-empty");
   if (existingEmpty) existingEmpty.remove();
-
-  const div = document.createElement('div');
-  div.className = 'message';
-  const authorLetter = (msg.author || '?').charAt(0).toUpperCase();
+  const div = document.createElement("div");
+  div.className = "message";
+  const authorLetter = (msg.author || "?").charAt(0).toUpperCase();
   div.innerHTML = `
     <div class="avatar">${escapeHtml(authorLetter)}</div>
     <div class="bubble">
@@ -270,166 +279,344 @@ function renderMessage(msg, { live = false } = {}) {
     </div>
   `;
   messagesEl.appendChild(div);
-  if (!live) return;
-  // автопрокрутка только если пользователь внизу чата
+  if (!opts.live) return;
   const atBottom = messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - 40;
   if (atBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
 }
-
+function clearMessages() {
+  const messagesEl = el("messages");
+  messagesEl.innerHTML = "";
+  const empty = document.createElement("div");
+  empty.className = "messages-empty";
+  empty.textContent = "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u043F\u043E\u043A\u0430 \u043D\u0435\u0442";
+  messagesEl.appendChild(empty);
+}
 async function openTextChannel(channel) {
-  chatHeader.textContent = '# ' + channel.name;
-  currentChannelId = channel.id;
-  messagesEl.innerHTML = '';
+  const messagesEl = el("messages");
+  el("chatHeader").textContent = "# " + channel.name;
+  state.currentChannelId = channel.id;
+  messagesEl.innerHTML = "";
   clearMessages();
   try {
-    const history = await invoke('get_messages', { channelId: channel.id });
+    const history = await api.getMessages(channel.id);
     if (history.length === 0) clearMessages();
-    else history.forEach(msg => renderMessage(msg));
+    else history.forEach((msg) => renderMessage(msg));
   } catch (e) {
-    messagesEl.innerHTML = '';
-    const div = document.createElement('div');
-    div.className = 'messages-empty';
-    div.textContent = 'Не удалось загрузить историю: ' + e;
+    messagesEl.innerHTML = "";
+    const div = document.createElement("div");
+    div.className = "messages-empty";
+    div.textContent = "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0438\u0441\u0442\u043E\u0440\u0438\u044E: " + e;
     messagesEl.appendChild(div);
   }
 }
-
 function appendLiveMessage(msg) {
-  // Считаем непрочитанное, если канал не открыт или сообщение из другого канала
-  if (!currentChannelId || msg.channel_id !== currentChannelId) {
-    unread.set(msg.channel_id, (unread.get(msg.channel_id) || 0) + 1);
+  if (!state.currentChannelId || msg.channel_id !== state.currentChannelId) {
+    state.unread.set(msg.channel_id, (state.unread.get(msg.channel_id) || 0) + 1);
     updateBadge(msg.channel_id);
     return;
   }
   renderMessage(msg, { live: true });
 }
-
-// --- Голосовой канал ---
-
-async function joinVoice(channel) {
-  currentVoiceChannelId = channel.id;
-  voiceChannelName.textContent = channel.name;
-  setStatus('Подключаюсь…');
-  voiceCall.classList.add('active');
-  try {
-    await invoke('join_voice_channel', { channelId: channel.id, guildId: currentGuildId });
-  } catch (e) {
-    setStatus('Ошибка: ' + e);
-  }
-}
-
-function setStatus(text) {
-  statusEl.textContent = text;
-}
-
-let micMuted = false;
-let deafened = false;
-
-function paintVoiceButtons() {
-  const mic = document.getElementById('micBtn');
-  mic.classList.toggle('active', micMuted);
-  mic.title = micMuted ? 'Микрофон заглушён' : 'Микрофон';
-  mic.textContent = micMuted ? '🔇' : '🎙';
-  const deaf = document.getElementById('deafBtn');
-  deaf.classList.toggle('active', deafened);
-  deaf.title = deafened ? 'Звук отключён' : 'Звук';
-  deaf.textContent = deafened ? '🔇' : '🔊';
-}
-
-document.getElementById('micBtn').onclick = async () => {
-  // Deafen подразумевает mute: клик по микрофону сначала снимает глухоту.
-  if (deafened) {
-    deafened = false;
-    micMuted = false;
-    try { await invoke('set_self_deaf', { deaf: false }); } catch (_) {}
-    paintVoiceButtons();
-    return;
-  }
-  micMuted = !micMuted;
-  try { await invoke('set_self_mute', { muted: micMuted }); } catch (_) {}
-  paintVoiceButtons();
-};
-
-document.getElementById('deafBtn').onclick = async () => {
-  deafened = !deafened;
-  try { await invoke('set_self_deaf', { deaf: deafened }); } catch (_) {}
-  // Как в Discord: deafen тянет мьют микрофона, un-deaf снимает оба.
-  micMuted = deafened;
-  paintVoiceButtons();
-};
-
-hangupBtn.onclick = async () => {
-  try {
-    await invoke('leave_voice_channel');
-  } catch (_) {}
-  currentVoiceChannelId = null;
-  setStatus('');
-  voiceCall.classList.remove('active');
-};
-
-// --- Отправка сообщений ---
-
-messageInput.addEventListener('input', () => {
-  messageInput.style.height = 'auto';
-  messageInput.style.height = messageInput.scrollHeight + 'px';
-});
-
-messageInput.addEventListener('keypress', async (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
+function initChatInput() {
+  const messageInput = el("messageInput");
+  const messagesEl = el("messages");
+  messageInput.addEventListener("input", () => {
+    messageInput.style.height = "auto";
+    messageInput.style.height = messageInput.scrollHeight + "px";
+  });
+  messageInput.addEventListener("keypress", async (e) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
     const text = messageInput.value.trim();
-    if (!text || !currentChannelId) return;
-    messageInput.value = '';
-    messageInput.style.height = 'auto';
+    const channelId = state.currentChannelId;
+    if (!text || !channelId) return;
+    messageInput.value = "";
+    messageInput.style.height = "auto";
     try {
-      const msg = await invoke('send_message', { channelId: currentChannelId, content: text });
+      const msg = await api.sendMessage(channelId, text);
       renderMessage(msg, { live: true });
       messagesEl.scrollTop = messagesEl.scrollHeight;
     } catch (err) {
-      showError('Не отправилось: ' + err);
+      showError("\u041D\u0435 \u043E\u0442\u043F\u0440\u0430\u0432\u0438\u043B\u043E\u0441\u044C: " + err);
     }
-  }
-});
-
-// --- Живые события от Gateway ---
-
-if (listen) {
-  listen('message_create', (event) => {
-    appendLiveMessage(event.payload);
-  });
-  listen('gateway_status', (event) => {
-    const p = event.payload || {};
-    setGatewayStatus(p.status, p.error);
-  });
-  listen('voice_status', (event) => {
-    const p = event.payload || {};
-    if (p.status === 'left') {
-      currentVoiceChannelId = null;
-      setStatus('');
-      voiceCall.classList.remove('active');
-      // Свежий вход в канал всегда unmuted/un-deaf (op 4 при join) — кнопки сбросим.
-      micMuted = false;
-      deafened = false;
-      paintVoiceButtons();
-    } else if (p.status === 'joining') {
-      setStatus('Подключаюсь…');
-    } else if (p.status === 'connected') {
-      setStatus('Голос: подключено (DAVE/E2EE) 🎧');
-    } else if (p.status === 'reconnecting') {
-      setStatus('Голос: переподключение…');
-    } else if (p.status === 'error') {
-      setStatus('Ошибка голоса: ' + (p.error || 'неизвестно'));
-    }
-  });
-  listen('voice_channel_ready', (event) => {
-    setStatus('Голос: данные собраны, подключаюсь к голосовому серверу…');
   });
 }
 
-logoutBtn.onclick = async () => {
-  try { await invoke('logout'); } catch (_) {}
+// src/ui/voice.ts
+function setVoiceStatus(text) {
+  el("voiceStatus").textContent = text;
+}
+async function joinVoice(channel) {
+  const guildId = state.currentGuildId;
+  if (!guildId) return;
+  state.currentVoiceChannelId = channel.id;
+  el("voiceChannelName").textContent = channel.name;
+  setVoiceStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C\u2026");
+  el("voiceCall").classList.add("active");
+  try {
+    await api.joinVoice(channel.id, guildId);
+  } catch (e) {
+    setVoiceStatus("\u041E\u0448\u0438\u0431\u043A\u0430: " + e);
+  }
+}
+function paintVoiceButtons() {
+  const mic = el("micBtn");
+  mic.classList.toggle("active", state.micMuted);
+  mic.title = state.micMuted ? "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u0437\u0430\u0433\u043B\u0443\u0448\u0451\u043D" : "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D";
+  mic.textContent = state.micMuted ? "\u{1F507}" : "\u{1F399}";
+  const deaf = el("deafBtn");
+  deaf.classList.toggle("active", state.deafened);
+  deaf.title = state.deafened ? "\u0417\u0432\u0443\u043A \u043E\u0442\u043A\u043B\u044E\u0447\u0451\u043D" : "\u0417\u0432\u0443\u043A";
+  deaf.textContent = state.deafened ? "\u{1F507}" : "\u{1F50A}";
+}
+function initVoiceControls() {
+  el("micBtn").onclick = async () => {
+    if (state.deafened) {
+      state.deafened = false;
+      state.micMuted = false;
+      try {
+        await api.setSelfDeaf(false);
+      } catch {
+      }
+      paintVoiceButtons();
+      return;
+    }
+    state.micMuted = !state.micMuted;
+    try {
+      await api.setSelfMute(state.micMuted);
+    } catch {
+    }
+    paintVoiceButtons();
+  };
+  el("deafBtn").onclick = async () => {
+    state.deafened = !state.deafened;
+    try {
+      await api.setSelfDeaf(state.deafened);
+    } catch {
+    }
+    state.micMuted = state.deafened;
+    paintVoiceButtons();
+  };
+  el("hangupBtn").onclick = async () => {
+    try {
+      await api.leaveVoice();
+    } catch {
+    }
+    state.currentVoiceChannelId = null;
+    setVoiceStatus("");
+    el("voiceCall").classList.remove("active");
+  };
+}
+function handleVoiceStatus(p) {
+  if (p.status === "left") {
+    state.currentVoiceChannelId = null;
+    setVoiceStatus("");
+    el("voiceCall").classList.remove("active");
+    state.micMuted = false;
+    state.deafened = false;
+    paintVoiceButtons();
+  } else if (p.status === "joining") {
+    setVoiceStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C\u2026");
+  } else if (p.status === "connected") {
+    setVoiceStatus("\u0413\u043E\u043B\u043E\u0441: \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E (DAVE/E2EE) \u{1F3A7}");
+  } else if (p.status === "reconnecting") {
+    setVoiceStatus("\u0413\u043E\u043B\u043E\u0441: \u043F\u0435\u0440\u0435\u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435\u2026");
+  } else if (p.status === "error") {
+    setVoiceStatus("\u041E\u0448\u0438\u0431\u043A\u0430 \u0433\u043E\u043B\u043E\u0441\u0430: " + (p.error || "\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u043E"));
+  }
+}
+
+// src/ui/channels.ts
+function isVoice(c) {
+  return c.kind === 2 || c.kind === 13;
+}
+async function loadChannels(guild) {
+  const channelsEl = el("channels");
+  state.currentGuildId = guild.id;
+  channelsEl.innerHTML = "";
+  const cat = document.createElement("div");
+  cat.className = "channel-category";
+  cat.textContent = guild.name;
+  channelsEl.appendChild(cat);
+  try {
+    const channels = await api.getChannels(guild.id);
+    channels.forEach((c) => {
+      const div = document.createElement("div");
+      div.className = `channel-item ${isVoice(c) ? "voice" : "text"}`;
+      div.dataset.channelId = c.id;
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "channel-name";
+      nameSpan.textContent = c.name;
+      const badge = document.createElement("span");
+      badge.className = "unread-badge";
+      div.appendChild(nameSpan);
+      div.appendChild(badge);
+      state.channelEls[c.id] = div;
+      updateBadge(c.id);
+      div.onclick = () => {
+        document.querySelectorAll(".channel-item").forEach((node) => node.classList.remove("active"));
+        div.classList.add("active");
+        state.unread.delete(c.id);
+        updateBadge(c.id);
+        if (isVoice(c)) void joinVoice(c);
+        else void openTextChannel(c);
+      };
+      channelsEl.appendChild(div);
+    });
+  } catch (e) {
+    showError("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u043A\u0430\u043D\u0430\u043B\u044B: " + e);
+  }
+}
+
+// src/ui/servers.ts
+function serverAvatar(guild) {
+  if (guild.icon) {
+    return `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=64`;
+  }
+  return null;
+}
+async function loadGuilds() {
+  const serversEl = el("servers");
+  try {
+    const guilds = await api.getGuilds();
+    serversEl.innerHTML = "";
+    if (!guilds || guilds.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty-servers";
+      empty.textContent = "\u0421\u0435\u0440\u0432\u0435\u0440\u044B \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u044B";
+      serversEl.appendChild(empty);
+      return;
+    }
+    guilds.forEach((g) => {
+      const div = document.createElement("div");
+      div.className = "server-item";
+      div.title = g.name;
+      const imgUrl = serverAvatar(g);
+      if (imgUrl) {
+        const img = document.createElement("img");
+        img.src = imgUrl;
+        img.alt = g.name;
+        img.onerror = () => {
+          div.textContent = g.name.charAt(0).toUpperCase();
+          div.classList.add("server-letter");
+        };
+        div.appendChild(img);
+      } else {
+        div.textContent = g.name.charAt(0).toUpperCase();
+        div.classList.add("server-letter");
+      }
+      div.onclick = () => {
+        document.querySelectorAll(".server-item").forEach((node) => node.classList.remove("active"));
+        div.classList.add("active");
+        void loadChannels(g);
+      };
+      serversEl.appendChild(div);
+    });
+  } catch (e) {
+    showError("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0441\u0435\u0440\u0432\u0435\u0440\u044B: " + e);
+  }
+}
+
+// src/login.ts
+function showApp(username) {
+  el("login").style.display = "none";
+  el("app").style.display = "flex";
+  el("username").textContent = username;
+  el("userAreaName").textContent = username;
+  el("avatar").textContent = username.charAt(0).toUpperCase();
+  void loadGuilds();
+}
+function connectGateway() {
+  api.connectGateway().catch((e) => console.warn("gateway:", e));
+}
+async function tryRestoreSession() {
+  try {
+    const me = await api.getMe();
+    showApp(me.username);
+    connectGateway();
+  } catch {
+  }
+}
+function initLogin() {
+  const loginStatus = el("loginStatus");
+  const loginBtn = el("loginBtn");
+  loginBtn.addEventListener("click", async () => {
+    loginBtn.disabled = true;
+    loginStatus.textContent = "\u041E\u0442\u043A\u0440\u044B\u0432\u0430\u044E Discord \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435\u2026";
+    try {
+      const res = await api.startLogin();
+      showApp(res.username);
+      connectGateway();
+    } catch (e) {
+      loginStatus.textContent = String(e);
+      showError(e);
+    } finally {
+      loginBtn.disabled = false;
+    }
+  });
+  const tokenInput = el("tokenInput");
+  const tokenBtn = el("tokenBtn");
+  tokenBtn.addEventListener("click", async () => {
+    const token = tokenInput.value.trim();
+    if (!token) {
+      showError("\u0412\u0441\u0442\u0430\u0432\u044C \u0442\u043E\u043A\u0435\u043D \u0432 \u043F\u043E\u043B\u0435");
+      return;
+    }
+    tokenBtn.disabled = true;
+    loginStatus.textContent = "\u041F\u0440\u043E\u0432\u0435\u0440\u044F\u044E \u0442\u043E\u043A\u0435\u043D\u2026";
+    try {
+      const res = await api.loginWithToken(token);
+      tokenInput.value = "";
+      showApp(res.username);
+      connectGateway();
+    } catch (e) {
+      loginStatus.textContent = String(e);
+      showError(e);
+    } finally {
+      tokenBtn.disabled = false;
+    }
+  });
+}
+
+// src/ui/status.ts
+function setGatewayStatus(status, error) {
+  const dot = el("statusDot");
+  const text = el("statusText");
+  dot.className = "status-dot";
+  switch (status) {
+    case "connected":
+    case "ready":
+      dot.classList.add("connected");
+      text.textContent = "\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u043A Discord";
+      text.style.color = "#dcddde";
+      break;
+    case "reconnecting":
+      dot.classList.add("connecting");
+      text.textContent = error ? `\u041F\u0435\u0440\u0435\u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435\u2026 (${error})` : "\u041F\u0435\u0440\u0435\u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435\u2026";
+      text.style.color = "#faa61a";
+      break;
+    default:
+      dot.classList.add("disconnected");
+      text.textContent = "\u041D\u0435\u0442 \u0441\u043E\u0435\u0434\u0438\u043D\u0435\u043D\u0438\u044F";
+      text.style.color = "#8e9297";
+  }
+}
+
+// src/app.ts
+onMessageCreate((p) => appendLiveMessage(p));
+onGatewayStatus((p) => setGatewayStatus(p.status, p.error));
+onVoiceStatus((p) => handleVoiceStatus(p));
+onVoiceChannelReady(() => {
+  setVoiceStatus("\u0413\u043E\u043B\u043E\u0441: \u0434\u0430\u043D\u043D\u044B\u0435 \u0441\u043E\u0431\u0440\u0430\u043D\u044B, \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C \u043A \u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u043C\u0443 \u0441\u0435\u0440\u0432\u0435\u0440\u0443\u2026");
+});
+initLogin();
+initChatInput();
+initVoiceControls();
+el("logoutBtn").onclick = async () => {
+  try {
+    await api.logout();
+  } catch {
+  }
   location.reload();
 };
-
-// Автовосстановление сессии при загрузке
-tryRestoreSession();
+void tryRestoreSession();
