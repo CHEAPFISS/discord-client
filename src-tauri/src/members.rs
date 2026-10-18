@@ -214,3 +214,42 @@ pub async fn get_guild_members(
     }
     Ok(groups)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn to_member_prefers_nick_then_display_then_username() {
+        let m = json!({
+            "nick": "Мойник",
+            "user": {"id": "1", "username": "user", "display_name": "Display", "avatar": "av", "bot": true},
+            "roles": ["10", "20"]
+        });
+        let mi = to_member(&m);
+        assert_eq!(mi.user_id, "1");
+        assert_eq!(mi.username, "Мойник");
+        assert_eq!(mi.avatar.as_deref(), Some("av"));
+        assert!(mi.bot);
+        assert_eq!(mi.roles, vec!["10".to_string(), "20".to_string()]);
+    }
+
+    #[test]
+    fn to_member_empty_nick_falls_back() {
+        let m = json!({
+            "nick": "",
+            "user": {"id": "2", "username": "user2", "display_name": "Display2"}
+        });
+        assert_eq!(to_member(&m).username, "Display2");
+    }
+
+    #[test]
+    fn to_member_missing_user_is_empty() {
+        let mi = to_member(&json!({}));
+        assert_eq!(mi.user_id, "");
+        assert_eq!(mi.username, "");
+        assert!(!mi.bot);
+        assert!(mi.roles.is_empty());
+    }
+}

@@ -368,3 +368,46 @@ fn save_session_to_disk(state: &DiscordState) -> Result<(), String> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_presence_defaults_to_offline() {
+        let p = parse_presence(&json!({}));
+        assert_eq!(p.status, "offline");
+        assert!(p.activities.is_empty());
+    }
+
+    #[test]
+    fn parse_presence_activities() {
+        let p = parse_presence(&json!({
+            "status": "online",
+            "activities": [
+                {"type": 0, "name": "Dota 2", "details": "Ранг", "state": "В очереди"},
+                {"type": 4, "name": "кастом", "emoji": {"name": "😀"}}
+            ]
+        }));
+        assert_eq!(p.status, "online");
+        assert_eq!(p.activities.len(), 2);
+        assert_eq!(p.activities[0].kind, 0);
+        assert_eq!(p.activities[0].name, "Dota 2");
+        assert_eq!(p.activities[0].details.as_deref(), Some("Ранг"));
+        assert_eq!(p.activities[0].state.as_deref(), Some("В очереди"));
+        // unicode-эмодзи — без двоеточий
+        assert_eq!(p.activities[1].emoji.as_deref(), Some("😀"));
+    }
+
+    #[test]
+    fn parse_presence_custom_emoji_with_id_is_wrapped() {
+        let p = parse_presence(&json!({
+            "status": "idle",
+            "activities": [
+                {"type": 4, "name": "x", "emoji": {"id": "123", "name": "blob"}}
+            ]
+        }));
+        assert_eq!(p.activities[0].emoji.as_deref(), Some(":blob:"));
+    }
+}

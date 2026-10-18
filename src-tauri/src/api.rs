@@ -372,3 +372,58 @@ pub fn open_url(url: String) -> Result<(), String> {
         .map(|_| ())
         .map_err(|e| format!("Не удалось открыть: {e}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_message_basic() {
+        let d = json!({
+            "id": "123",
+            "channel_id": "456",
+            "content": "привет",
+            "timestamp": "2026-10-18T00:00:00Z",
+            "author": {"id": "789", "username": "cheapfiss", "avatar": "abc"}
+        });
+        let m = parse_message(&d);
+        assert_eq!(m.id, "123");
+        assert_eq!(m.channel_id, "456");
+        assert_eq!(m.content, "привет");
+        assert_eq!(m.author, "cheapfiss");
+        assert_eq!(m.author_id, "789");
+        assert_eq!(m.author_avatar.as_deref(), Some("abc"));
+        assert!(m.attachments.is_empty());
+        assert!(m.embeds.is_empty());
+    }
+
+    #[test]
+    fn parse_message_missing_fields_are_safe() {
+        let m = parse_message(&json!({}));
+        assert_eq!(m.id, "");
+        assert_eq!(m.content, "");
+        assert!(m.author_avatar.is_none());
+    }
+
+    #[test]
+    fn parse_message_attachments_and_embeds() {
+        let d = json!({
+            "attachments": [
+                {"url": "https://x/img.png", "filename": "img.png", "content_type": "image/png", "width": 100, "height": 50},
+                {"filename": "no-url.png"}
+            ],
+            "embeds": [
+                {"type": "gifv", "title": "Gif", "video": {"proxy_url": "https://x/g.mp4"}, "color": 16711680}
+            ]
+        });
+        let m = parse_message(&d);
+        // attachment без url отбрасывается
+        assert_eq!(m.attachments.len(), 1);
+        assert_eq!(m.attachments[0].width, Some(100));
+        assert_eq!(m.embeds.len(), 1);
+        assert_eq!(m.embeds[0].kind, "gifv");
+        assert_eq!(m.embeds[0].video.as_deref(), Some("https://x/g.mp4"));
+        assert_eq!(m.embeds[0].color, Some(16711680));
+    }
+}
