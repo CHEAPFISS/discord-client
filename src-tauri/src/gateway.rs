@@ -3,7 +3,7 @@ use futures_util::{SinkExt, StreamExt};
 use tauri::{command, AppHandle, Emitter, Manager, State};
 use tokio_tungstenite::tungstenite::Message;
 
-use discord_client::{parse_presence, parse_voice_state, DiscordState, GatewaySender};
+use discord_client::{parse_presence, parse_voice_state, DiscordState, GatewaySender, StreamTarget};
 use crate::api::parse_message;
 use crate::voice::connect::connect_voice;
 
@@ -47,6 +47,7 @@ pub(crate) fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
         guild_member_counts: state.guild_member_counts.clone(),
         gateway_status: state.gateway_status.clone(),
         member_fetch: state.member_fetch.clone(),
+        stream: state.stream.clone(),
     }
 }
 
@@ -413,6 +414,10 @@ async fn gateway_once(
                     "VOICE_SERVER_UPDATE" => {
                         handle_voice_server(app, &v["d"]).await;
                     }
+                    // Стримы (Go Live): отдельный RTC-коннект, свои события.
+                    "STREAM_CREATE" => handle_stream_create(app, &v["d"]),
+                    "STREAM_SERVER_UPDATE" => handle_stream_server_update(app, &v["d"]),
+                    "STREAM_DELETE" => handle_stream_delete(app, &v["d"]),
                     // GUILD_CREATE приходит на каждый сервер после READY: засеваем
                     // presences и голосовые состояния участников.
                     "GUILD_CREATE" => {
@@ -630,6 +635,120 @@ async fn handle_voice_server(app: &AppHandle, d: &serde_json::Value) {
     }
     // Тройка могла собраться здесь (токен пришёл последним) — общий триггер.
     maybe_connect_voice(app, &state);
+}
+
+/// STREAM_CREATE: пришёл стрим (или мы подключились к чужому). Несёт
+/// rtc_server_id/rtc_channel_id — RTC-идентичность стрима (своя, не родительского канала).
+/// Токен/endpoint придут позже в STREAM_SERVER_UPDATE.
+fn handle_stream_create(app: &AppHandle, d: &serde_json::Value) {
+    let state: State<'_, DiscordState> = app.state();
+    let stream_key = d["stream_key"].as_str().unwrap_or("").to_string();
+    if stream_key.is_empty() {
+        return;
+    }
+    // owner_id — последний сегмент ключа: guild:channel:owner | call:channel:owner.
+    let owner_id = stream_key.rsplit(':').next().unwrap_or("").to_string();
+    {
+        let mut slot = state.stream.lock().unwrap();
+        let target = slot.get_or_insert_with(StreamTarget::default);
+        target.stream_key = stream_key.clone();
+        target.owner_id = owner_id.clone();
+        if let Some(v) = d["rtc_server_id"].as_str() {
+            target.rtc_server_id = Some(v.to_string());
+        }
+        if let Some(v) = d["rtc_channel_id"].as_str() {
+            target.rtc_channel_id = Some(v.to_string());
+        }
+        log::info!(
+            "Stream Create: key={stream_key} rtc_server={:?} rtc_channel={:?} paused={:?}",
+            target.rtc_server_id,
+            target.rtc_channel_id,
+            d["paused"]
+        );
+    }
+    maybe_emit_stream_ready(app, &state);
+}
+
+/// STREAM_SERVER_UPDATE: пришёл токен/endpoint голосового сервера стрима.
+/// endpoint=null — сервер ушёл, переподключаться нельзя до новой аллокации.
+fn handle_stream_server_update(app: &AppHandle, d: &serde_json::Value) {
+    let state: State<'_, DiscordState> = app.state();
+    let stream_key = d["stream_key"].as_str().unwrap_or("").to_string();
+    if stream_key.is_empty() {
+        return;
+    }
+    let endpoint = d["endpoint"].as_str();
+    {
+        let mut slot = state.stream.lock().unwrap();
+        // Сервер стрима мог смениться: привязываемся к ключу, не к «любому» стриму.
+        if slot.as_ref().is_none_or(|t| t.stream_key != stream_key) {
+            let target = slot.get_or_insert_with(StreamTarget::default);
+            target.stream_key = stream_key.clone();
+            target.owner_id = stream_key.rsplit(':').next().unwrap_or("").to_string();
+        }
+        let target = slot.as_mut().expect("stream target ensured");
+        match endpoint {
+            Some(ep) => {
+                target.endpoint = Some(ep.trim_start_matches("wss://").to_string());
+                if let Some(tok) = d["token"].as_str() {
+                    target.token = Some(tok.to_string());
+                }
+                log::info!("Stream Server Update: key={stream_key} endpoint={:?}", target.endpoint);
+            }
+            None => {
+                // Endpoint ушёл: сбрасываем транспортную пару, не трогая RTC-идентичность.
+                target.token = None;
+                target.endpoint = None;
+                log::info!("Stream Server Update: key={stream_key} endpoint=null (сервер ушёл)");
+            }
+        }
+    }
+    maybe_emit_stream_ready(app, &state);
+}
+
+/// STREAM_DELETE: стрим закончился / недоступен / не удалось подключиться
+/// (reason=stream_full). Полностью сбрасываем цель.
+fn handle_stream_delete(app: &AppHandle, d: &serde_json::Value) {
+    let state: State<'_, DiscordState> = app.state();
+    let stream_key = d["stream_key"].as_str().unwrap_or("");
+    let reason = d["reason"].as_str().unwrap_or("");
+    log::info!("Stream Delete: key={stream_key} reason={reason}");
+    *state.stream.lock().unwrap() = None;
+    let _ = app.emit(
+        "stream_update",
+        json!({"watching": false, "stream_key": stream_key, "reason": reason}),
+    );
+}
+
+/// Когда цели стрима собраны (rtc-идентичность + токен/endpoint) — сообщаем фронту.
+/// Само RTC-подключение стрима подключается отдельно (Шаг 1.x), здесь только сигнал.
+fn maybe_emit_stream_ready(app: &AppHandle, state: &State<'_, DiscordState>) {
+    let snapshot = {
+        let slot = state.stream.lock().unwrap();
+        slot.clone()
+    };
+    let Some(t) = snapshot else { return };
+    if !t.ready() {
+        return;
+    }
+    log::info!(
+        "Stream target готов: key={} rtc_server={} rtc_channel={} endpoint={:?} (подключение стрима — Шаг 1.x)",
+        t.stream_key,
+        t.rtc_server_id.as_deref().unwrap_or("?"),
+        t.rtc_channel_id.as_deref().unwrap_or("?"),
+        t.endpoint
+    );
+    let _ = app.emit(
+        "stream_update",
+        json!({
+            "watching": true,
+            "stream_key": t.stream_key,
+            "owner_id": t.owner_id,
+            "rtc_server_id": t.rtc_server_id,
+            "rtc_channel_id": t.rtc_channel_id,
+            "endpoint": t.endpoint,
+        }),
+    );
 }
 
 /// Общий триггер автоподключения: запускается, когда тройка

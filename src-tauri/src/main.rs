@@ -50,6 +50,8 @@ fn main() {
             voice::leave_voice_channel,
             voice::set_self_mute,
             voice::set_self_deaf,
+            voice::watch_stream,
+            voice::unwatch_stream,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

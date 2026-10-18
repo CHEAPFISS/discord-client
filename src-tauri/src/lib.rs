@@ -26,6 +26,8 @@ impl GatewaySender {
 /// Активное голосовое соединение (oto) — держим хендл живым, иначе соединение закроется.
 pub type ActiveVoiceConnection = oto::VoiceConnection;
 
+/// Готовность (session, token, endpoint) → задача подключения.
+///
 /// Хендл активного oto-соединения + session_id, для которого оно создавалось.
 /// Токен Discord одноразовый — повторное подключение на ту же сессию даёт 4014/4022.
 pub struct VoiceSlot {
@@ -34,6 +36,37 @@ pub struct VoiceSlot {
     pub token: Option<String>,
     /// Насос событий уже заспавнен для текущего соединения (один, не на каждый connect).
     pub pump_spawned: bool,
+}
+
+/// Данные стрима (Go Live), которые мы смотрим: RTC-сервер/канал + токен/endpoint.
+/// Собираются из `STREAM_CREATE` (rtc_server_id/rtc_channel_id) и
+/// `STREAM_SERVER_UPDATE` (token/endpoint); когда обе части есть — можно
+/// поднимать отдельный RTC-коннект стрима (Шаг 1.x: oto video).
+#[derive(Debug, Clone, Default)]
+pub struct StreamTarget {
+    /// `guild:channel:owner` — идентификатор стрима (нужен для Watch/Delete).
+    pub stream_key: String,
+    /// ID стримера (владельца стрима).
+    pub owner_id: String,
+    /// RTC-сервер стрима (= server_id для stream-Identify). Своя DAVE-группа
+    /// вычисляется отсюда: media_session_id = rtc_server_id - 1.
+    pub rtc_server_id: Option<String>,
+    /// RTC-канал стрима (= channel_id для stream-Identify).
+    pub rtc_channel_id: Option<String>,
+    /// Токен голосового подключения стрима (из STREAM_SERVER_UPDATE).
+    pub token: Option<String>,
+    /// Endpoint голосового сервера стрима (из STREAM_SERVER_UPDATE).
+    pub endpoint: Option<String>,
+}
+
+impl StreamTarget {
+    /// Обе части собраны (RTC-идентичность + токен/endpoint) → можно подключаться.
+    pub fn ready(&self) -> bool {
+        self.rtc_server_id.is_some()
+            && self.rtc_channel_id.is_some()
+            && self.token.is_some()
+            && self.endpoint.is_some()
+    }
 }
 
 impl Default for VoiceSlot {
@@ -235,6 +268,9 @@ pub struct DiscordState {
     pub gateway_status: Arc<Mutex<(String, Option<String>)>>,
     /// Запросы/кэш списка участников (op 37).
     pub member_fetch: Arc<MemberFetchHub>,
+    /// Стрим (Go Live), который мы смотрим: RTC-данные + токен/endpoint.
+    /// None — стрим не смотрим.
+    pub stream: Arc<Mutex<Option<StreamTarget>>>,
 }
 
 /// Цель подключения к голосовому каналу + собранные данные авторизации.
@@ -272,6 +308,7 @@ impl Default for DiscordState {
             guild_member_counts: Arc::new(Mutex::new(HashMap::new())),
             gateway_status: Arc::new(Mutex::new(("disconnected".to_string(), None))),
             member_fetch: Arc::new(MemberFetchHub::default()),
+            stream: Arc::new(Mutex::new(None)),
         }
     }
 }

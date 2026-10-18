@@ -146,6 +146,41 @@ pub(crate) async fn leave_voice_channel(
     Ok(())
 }
 
+/// Смотреть чужой стрим (Go Live): op 20 Watch Stream. Требует, чтобы мы уже
+/// были в голосовом канале (Discord отвечает STREAM_CREATE + STREAM_SERVER_UPDATE
+/// либо STREAM_DELETE с причиной). RTC-коннект стрима поднимается отдельно (Шаг 1.x).
+#[command]
+pub(crate) async fn watch_stream(
+    sender: State<'_, GatewaySender>,
+    stream_key: String,
+) -> Result<(), String> {
+    let op20 = json!({
+        "op": 20,
+        "d": { "stream_key": stream_key }
+    });
+    sender.send(op20).await
+}
+
+/// Перестать смотреть стрим: op 19 Delete Stream (для владельца стрима — закончит его).
+#[command]
+pub(crate) async fn unwatch_stream(
+    app: AppHandle,
+    state: State<'_, DiscordState>,
+    sender: State<'_, GatewaySender>,
+) -> Result<(), String> {
+    let key = state.stream.lock().unwrap().as_ref().map(|t| t.stream_key.clone());
+    if let Some(stream_key) = key {
+        let op19 = json!({
+            "op": 19,
+            "d": { "stream_key": stream_key }
+        });
+        let _ = sender.send(op19).await;
+    }
+    *state.stream.lock().unwrap() = None;
+    let _ = app.emit("stream_update", json!({"watching": false}));
+    Ok(())
+}
+
 /// Мьют микрофона: серверное состояние op 4 (видно другим клиентам, как у deafen)
 /// + локальная пауза захвата.
 #[command]
