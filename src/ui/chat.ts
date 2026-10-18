@@ -19,8 +19,13 @@ function escapeHtml(text: string): string {
 }
 
 function renderContent(rawHtml: string): string {
-  // Упоминания <@id> → красивая метка @user (без API-разрешения имён)
-  return rawHtml.replace(/&lt;@(!?\d+)&gt;/g, '<span class="mention">@$1</span>');
+  return (
+    rawHtml
+      // Упоминания <@id> → красивая метка @user (без API-разрешения имён)
+      .replace(/&lt;@(!?\d+)&gt;/g, '<span class="mention">@$1</span>')
+      // Спойлеры ||текст|| — скрыты до клика
+      .replace(/\|\|(.+?)\|\|/gs, '<span class="spoiler">$1</span>')
+  );
 }
 
 /** Голый URL в тексте → кликабельная ссылка (текст уже html-экранирован). */
@@ -219,6 +224,10 @@ export function initChatInput(): void {
   // Ссылки и картинки — в системный браузер, а не в вебвью.
   messagesEl.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
+    if (target.classList.contains('spoiler')) {
+      target.classList.replace('spoiler', 'revealed');
+      return;
+    }
     if (
       target instanceof HTMLImageElement &&
       (target.classList.contains('att-image') || target.classList.contains('embed-image'))

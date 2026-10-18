@@ -290,7 +290,7 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 function renderContent(rawHtml) {
-  return rawHtml.replace(/&lt;@(!?\d+)&gt;/g, '<span class="mention">@$1</span>');
+  return rawHtml.replace(/&lt;@(!?\d+)&gt;/g, '<span class="mention">@$1</span>').replace(/\|\|(.+?)\|\|/gs, '<span class="spoiler">$1</span>');
 }
 function linkify(escaped) {
   return escaped.replace(
@@ -459,6 +459,10 @@ function initChatInput() {
   const messagesEl = el("messages");
   messagesEl.addEventListener("click", (e) => {
     const target = e.target;
+    if (target.classList.contains("spoiler")) {
+      target.classList.replace("spoiler", "revealed");
+      return;
+    }
     if (target instanceof HTMLImageElement && (target.classList.contains("att-image") || target.classList.contains("embed-image"))) {
       void api.openUrl(target.src).catch(() => {
       });
