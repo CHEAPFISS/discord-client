@@ -3,7 +3,7 @@
 
 import { el } from '../dom';
 
-export function setGatewayStatus(status: string, error?: string): void {
+export function setGatewayStatus(status: string, error?: string | null): void {
   const pill = el('appStatus');
   const text = el('statusText');
   switch (status) {

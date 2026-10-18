@@ -14,8 +14,8 @@ export interface MessageCreatePayload {
 
 /** Состояние gateway-соединения. */
 export interface GatewayStatusPayload {
-  status: 'connected' | 'ready' | 'reconnecting';
-  error?: string;
+  status: 'connected' | 'ready' | 'reconnecting' | 'disconnected';
+  error?: string | null;
 }
 
 /** Состояние голосового соединения. */

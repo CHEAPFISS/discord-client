@@ -27,8 +27,32 @@ pub(crate) fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
         presences: state.presences.clone(),
         voice_states: state.voice_states.clone(),
         guild_member_counts: state.guild_member_counts.clone(),
+        gateway_status: state.gateway_status.clone(),
         member_fetch: state.member_fetch.clone(),
     }
+}
+
+/// Единая точка отправки статуса шлюза: запоминаем последний статус (для
+/// get_gateway_status после перезагрузки страницы) и эмитим во фронт.
+pub(crate) fn emit_gateway_status(app: &AppHandle, status: &str, error: Option<&str>) {
+    {
+        let state: State<'_, DiscordState> = app.state();
+        let mut guard = state.gateway_status.lock().unwrap();
+        guard.0 = status.to_string();
+        guard.1 = error.map(str::to_string);
+    }
+    let mut payload = json!({"status": status});
+    if let Some(e) = error {
+        payload["error"] = json!(e);
+    }
+    let _ = app.emit("gateway_status", payload);
+}
+
+/// Текущий статус шлюза — для восстановления индикатора после перезагрузки страницы.
+#[command]
+pub(crate) fn get_gateway_status(state: State<'_, DiscordState>) -> serde_json::Value {
+    let guard = state.gateway_status.lock().unwrap();
+    json!({"status": guard.0.clone(), "error": guard.1.clone()})
 }
 
 /// Смена идентичности: гасим голос (oto) и голосовой стейт под старым аккаунтом.
@@ -131,10 +155,7 @@ pub(crate) async fn gateway_loop(
             }
             Err(e) => {
                 log::warn!("Gateway: ошибка {e}, переподключение через 5с");
-                let _ = app.emit(
-                    "gateway_status",
-                    json!({"status": "reconnecting", "error": e}),
-                );
+                emit_gateway_status(&app, "reconnecting", Some(e.as_str()));
                 if !first_pass {
                     rekick_voice_if_joined(&app);
                 }
@@ -194,7 +215,7 @@ async fn gateway_once(
         .await
         .map_err(|e| e.to_string())?;
 
-    let _ = app.emit("gateway_status", json!({"status": "connected"}));
+    emit_gateway_status(app, "connected", None);
     log::info!("Gateway: подключен, heartbeat {heartbeat_ms}мс");
     log::info!("Identify отправлен");
 
@@ -313,7 +334,7 @@ async fn gateway_once(
                                 guilds.len()
                             );
                         }
-                        let _ = app.emit("gateway_status", json!({"status": "ready"}));
+                        emit_gateway_status(app, "ready", None);
                     }
                     "MESSAGE_CREATE" => {
                         let d = &v["d"];

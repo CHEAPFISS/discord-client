@@ -33,6 +33,13 @@ onVoiceChannelReady(() => {
 onPresenceUpdate((p) => handlePresenceUpdate(p));
 onVoiceMemberUpdate((p) => handleVoiceMemberUpdate(p));
 
+// После полной перезагрузки страницы события gateway_status уже не придут —
+// спрашиваем текущее состояние у бэкенда (Issue 1).
+void api
+  .getGatewayStatus()
+  .then((p) => setGatewayStatus(p.status, p.error ?? undefined))
+  .catch(() => {});
+
 // --- Локальные обработчики ---
 initLogin();
 initChatInput();

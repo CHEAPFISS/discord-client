@@ -136,6 +136,8 @@ var api = {
   getGuildActivity: (guildId) => invoke("get_guild_activity", { guildId }),
   getMessages: (channelId) => invoke("get_messages", { channelId }),
   sendMessage: (channelId, content) => invoke("send_message", { channelId, content }),
+  // --- Gateway ---
+  getGatewayStatus: () => invoke("get_gateway_status"),
   // --- Голос ---
   joinVoice: (channelId, guildId) => invoke("join_voice_channel", { channelId, guildId }),
   leaveVoice: () => invoke("leave_voice_channel"),
@@ -885,6 +887,8 @@ onVoiceChannelReady(() => {
 });
 onPresenceUpdate((p) => handlePresenceUpdate(p));
 onVoiceMemberUpdate((p) => handleVoiceMemberUpdate(p));
+void api.getGatewayStatus().then((p) => setGatewayStatus(p.status, p.error ?? void 0)).catch(() => {
+});
 initLogin();
 initChatInput();
 initVoiceControls();

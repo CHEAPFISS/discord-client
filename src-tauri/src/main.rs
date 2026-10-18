@@ -43,6 +43,7 @@ fn main() {
             auth::logout,
             // Gateway
             gateway::connect_gateway,
+            gateway::get_gateway_status,
             // Voice
             voice::join_voice_channel,
             voice::leave_voice_channel,

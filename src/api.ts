@@ -103,6 +103,10 @@ export const api = {
   sendMessage: (channelId: string, content: string) =>
     invoke<ChatMessage>('send_message', { channelId, content }),
 
+  // --- Gateway ---
+  getGatewayStatus: () =>
+    invoke<{ status: string; error?: string | null }>('get_gateway_status'),
+
   // --- Голос ---
   joinVoice: (channelId: string, guildId: string) =>
     invoke<void>('join_voice_channel', { channelId, guildId }),

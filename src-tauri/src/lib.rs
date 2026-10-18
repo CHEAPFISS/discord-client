@@ -158,6 +158,9 @@ pub struct DiscordState {
     pub voice_states: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
     /// Число участников сервера (из READY) — для расчёта диапазонов списка.
     pub guild_member_counts: Arc<Mutex<HashMap<String, u64>>>,
+    /// Последний статус gateway (status, error) — чтобы после полной перезагрузки
+    /// страницы фронт мог спросить текущее состояние (команда get_gateway_status).
+    pub gateway_status: Arc<Mutex<(String, Option<String>)>>,
     /// Запросы/кэш списка участников (op 37).
     pub member_fetch: Arc<MemberFetchHub>,
 }
@@ -193,6 +196,7 @@ impl Default for DiscordState {
             presences: Arc::new(Mutex::new(HashMap::new())),
             voice_states: Arc::new(Mutex::new(HashMap::new())),
             guild_member_counts: Arc::new(Mutex::new(HashMap::new())),
+            gateway_status: Arc::new(Mutex::new(("disconnected".to_string(), None))),
             member_fetch: Arc::new(MemberFetchHub::default()),
         }
     }
