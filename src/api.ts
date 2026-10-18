@@ -53,6 +53,8 @@ export interface ChatMessage {
   id: string;
   channel_id: string;
   author: string;
+  author_id: string;
+  author_avatar?: string | null;
   content: string;
   timestamp: string;
   attachments: Attachment[];

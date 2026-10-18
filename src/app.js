@@ -377,26 +377,44 @@ function appendAttachments(bubble, msg) {
   }
   if (media.childElementCount > 0) bubble.appendChild(media);
 }
+function avatarNode(msg) {
+  const av = document.createElement("div");
+  av.className = "avatar";
+  const letter = (msg.author || "?").charAt(0).toUpperCase();
+  if (msg.author_id && msg.author_avatar) {
+    const ext = msg.author_avatar.startsWith("a_") ? "gif" : "png";
+    const img = document.createElement("img");
+    img.src = `https://cdn.discordapp.com/avatars/${msg.author_id}/${msg.author_avatar}.${ext}?size=64`;
+    img.alt = "";
+    img.onerror = () => {
+      img.remove();
+      av.textContent = letter;
+    };
+    av.appendChild(img);
+  } else {
+    av.textContent = letter;
+  }
+  return av;
+}
 function renderMessage(msg, opts = {}) {
   const messagesEl = el("messages");
   const existingEmpty = messagesEl.querySelector(".messages-empty");
   if (existingEmpty) existingEmpty.remove();
   const div = document.createElement("div");
   div.className = "message";
-  const authorLetter = (msg.author || "?").charAt(0).toUpperCase();
-  div.innerHTML = `
-    <div class="avatar">${escapeHtml(authorLetter)}</div>
-    <div class="bubble">
+  div.appendChild(avatarNode(msg));
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.innerHTML = `
       <div class="header">
         <span class="author">${escapeHtml(msg.author)}</span>
         <span class="time">${fmtTime(msg.timestamp)}</span>
       </div>
       ${msg.content ? `<div class="text">${renderContent(escapeHtml(msg.content))}</div>` : ""}
-    </div>
   `;
-  const bubble = div.querySelector(".bubble");
   appendAttachments(bubble, msg);
   for (const e of msg.embeds) bubble.appendChild(embedNode(e));
+  div.appendChild(bubble);
   messagesEl.appendChild(div);
   if (!opts.live) return;
   const atBottom = messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - 40;

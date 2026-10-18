@@ -124,6 +124,27 @@ function appendAttachments(bubble: HTMLElement, msg: ChatMessage): void {
   if (media.childElementCount > 0) bubble.appendChild(media);
 }
 
+/** Аватар автора: с CDN (gif для анимированных), иначе — буква кружком. */
+function avatarNode(msg: ChatMessage): HTMLElement {
+  const av = document.createElement('div');
+  av.className = 'avatar';
+  const letter = (msg.author || '?').charAt(0).toUpperCase();
+  if (msg.author_id && msg.author_avatar) {
+    const ext = msg.author_avatar.startsWith('a_') ? 'gif' : 'png';
+    const img = document.createElement('img');
+    img.src = `https://cdn.discordapp.com/avatars/${msg.author_id}/${msg.author_avatar}.${ext}?size=64`;
+    img.alt = '';
+    img.onerror = () => {
+      img.remove();
+      av.textContent = letter;
+    };
+    av.appendChild(img);
+  } else {
+    av.textContent = letter;
+  }
+  return av;
+}
+
 function renderMessage(msg: ChatMessage, opts: { live?: boolean } = {}): void {
   const messagesEl = el('messages');
   // Убираем заглушку "пусто" при первом сообщении
@@ -132,20 +153,19 @@ function renderMessage(msg: ChatMessage, opts: { live?: boolean } = {}): void {
 
   const div = document.createElement('div');
   div.className = 'message';
-  const authorLetter = (msg.author || '?').charAt(0).toUpperCase();
-  div.innerHTML = `
-    <div class="avatar">${escapeHtml(authorLetter)}</div>
-    <div class="bubble">
+  div.appendChild(avatarNode(msg));
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.innerHTML = `
       <div class="header">
         <span class="author">${escapeHtml(msg.author)}</span>
         <span class="time">${fmtTime(msg.timestamp)}</span>
       </div>
       ${msg.content ? `<div class="text">${renderContent(escapeHtml(msg.content))}</div>` : ''}
-    </div>
   `;
-  const bubble = div.querySelector('.bubble') as HTMLElement;
   appendAttachments(bubble, msg);
   for (const e of msg.embeds) bubble.appendChild(embedNode(e));
+  div.appendChild(bubble);
   messagesEl.appendChild(div);
   if (!opts.live) return;
   // автопрокрутка только если пользователь внизу чата
