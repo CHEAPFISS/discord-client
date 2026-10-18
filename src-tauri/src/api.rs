@@ -324,6 +324,7 @@ pub async fn get_messages(
     }
     // API возвращает новые→старые; реверсим для отображения
     out.reverse();
+    log::debug!("get_messages: channel={channel_id} отдано {} шт.", out.len());
     Ok(out)
 }
 

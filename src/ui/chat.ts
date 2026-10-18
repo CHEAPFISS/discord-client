@@ -289,8 +289,13 @@ function clearMessages(): void {
 let openSeq = 0;
 
 export async function openTextChannel(channel: Channel): Promise<void> {
-  const seq = ++openSeq;
   const messagesEl = el('messages');
+  // Повторный клик по уже открытому каналу: ничего не грузим и не рендерим —
+  // иначе лишние запросы и (в старых версиях) копии истории в DOM.
+  if (state.currentChannelId === channel.id && messagesEl.querySelector('.message')) {
+    return;
+  }
+  const seq = ++openSeq;
   el('chatHeader').textContent = '# ' + channel.name;
   state.currentChannelId = channel.id;
   messagesEl.innerHTML = '';

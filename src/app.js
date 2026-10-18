@@ -511,8 +511,11 @@ function clearMessages() {
 }
 var openSeq = 0;
 async function openTextChannel(channel) {
-  const seq = ++openSeq;
   const messagesEl = el("messages");
+  if (state.currentChannelId === channel.id && messagesEl.querySelector(".message")) {
+    return;
+  }
+  const seq = ++openSeq;
   el("chatHeader").textContent = "# " + channel.name;
   state.currentChannelId = channel.id;
   messagesEl.innerHTML = "";
