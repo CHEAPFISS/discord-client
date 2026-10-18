@@ -283,7 +283,13 @@ function clearMessages(): void {
   messagesEl.appendChild(empty);
 }
 
+// Последовательность открытий канала: при быстрых повторных кликах несколько
+// await'ов get_messages дорисовывают историю друг за другом (очистка к тому
+// моменту уже прошла) — рендерит только последний вызов.
+let openSeq = 0;
+
 export async function openTextChannel(channel: Channel): Promise<void> {
+  const seq = ++openSeq;
   const messagesEl = el('messages');
   el('chatHeader').textContent = '# ' + channel.name;
   state.currentChannelId = channel.id;
@@ -291,9 +297,11 @@ export async function openTextChannel(channel: Channel): Promise<void> {
   clearMessages();
   try {
     const history = await api.getMessages(channel.id);
+    if (seq !== openSeq) return; // открыли канал ещё раз — этот ответ устарел
     if (history.length === 0) clearMessages();
     else history.forEach((msg) => renderMessage(msg));
   } catch (e) {
+    if (seq !== openSeq) return;
     messagesEl.innerHTML = '';
     const div = document.createElement('div');
     div.className = 'messages-empty';

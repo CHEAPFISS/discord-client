@@ -509,7 +509,9 @@ function clearMessages() {
   empty.textContent = "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u043F\u043E\u043A\u0430 \u043D\u0435\u0442";
   messagesEl.appendChild(empty);
 }
+var openSeq = 0;
 async function openTextChannel(channel) {
+  const seq = ++openSeq;
   const messagesEl = el("messages");
   el("chatHeader").textContent = "# " + channel.name;
   state.currentChannelId = channel.id;
@@ -517,9 +519,11 @@ async function openTextChannel(channel) {
   clearMessages();
   try {
     const history = await api.getMessages(channel.id);
+    if (seq !== openSeq) return;
     if (history.length === 0) clearMessages();
     else history.forEach((msg) => renderMessage(msg));
   } catch (e) {
+    if (seq !== openSeq) return;
     messagesEl.innerHTML = "";
     const div = document.createElement("div");
     div.className = "messages-empty";
