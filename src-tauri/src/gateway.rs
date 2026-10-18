@@ -148,6 +148,10 @@ pub(crate) fn rekick_voice_if_joined(app: &AppHandle) {
         .unwrap()
         .as_ref()
         .map(|v| (v.guild_id.clone(), v.channel_id.clone()));
+    // Состояние mute/deaf берём из атомиков: жёсткие false/false молча
+    // размьючивали/разглушали пользователя после reconnect-а.
+    let self_mute = st.self_mute.load(std::sync::atomic::Ordering::SeqCst);
+    let self_deaf = st.self_deaf.load(std::sync::atomic::Ordering::SeqCst);
     drop(st);
     let Some((guild_id, channel_id)) = target else { return };
     log::info!("Gateway: новая сессия — переотправка op 4 (канал {channel_id})");
@@ -159,8 +163,8 @@ pub(crate) fn rekick_voice_if_joined(app: &AppHandle) {
             "d": {
                 "guild_id": guild_id,
                 "channel_id": channel_id,
-                "self_mute": false,
-                "self_deaf": false
+                "self_mute": self_mute,
+                "self_deaf": self_deaf
             }
         });
         if let Err(e) = sender.send(op4).await {
@@ -549,6 +553,7 @@ async fn gateway_once(
 /// Плюс: ведёт учёт, кто из участников в каком голосовом канале (для списка участников).
 async fn handle_voice_state(app: &AppHandle, d: &serde_json::Value) {
     let state: State<'_, DiscordState> = app.state();
+    let mut session_set = false;
     {
         let mut guard = state.voice.lock().unwrap();
         if let Some(voice) = guard.as_mut() {
@@ -556,13 +561,21 @@ async fn handle_voice_state(app: &AppHandle, d: &serde_json::Value) {
                 && d["user_id"].as_str() == Some(voice.user_id.as_str())
             {
                 let session_id = d["session_id"].as_str().unwrap_or("").to_string();
-                if !session_id.is_empty() {
+                if !session_id.is_empty()
+                    && voice.session_id.as_deref() != Some(session_id.as_str())
+                {
                     voice.session_id = Some(session_id);
+                    session_set = true;
                 }
-                // Подключаемся только когда придёт свежий token (VOICE_SERVER_UPDATE) —
-                // иначе используем протухший и получим 4014/4022.
             }
         }
+    }
+    // Тройка (session, token, endpoint) могла собраться именно здесь: Discord
+    // вправе прислать VOICE_SERVER_UPDATE раньше VOICE_STATE_UPDATE — раньше
+    // подключение стартовало только из VOICE_SERVER_UPDATE и при таком порядке
+    // не стартовало вообще.
+    if session_set {
+        maybe_connect_voice(app, &state);
     }
 
     // Голосовые состояния участников (для колонки участников на фронте).
@@ -591,47 +604,67 @@ async fn handle_voice_state(app: &AppHandle, d: &serde_json::Value) {
 
 async fn handle_voice_server(app: &AppHandle, d: &serde_json::Value) {
     let state: State<'_, DiscordState> = app.state();
-    let mut guard = state.voice.lock().unwrap();
-    if let Some(voice) = guard.as_mut() {
-        if d["guild_id"].as_str() == Some(voice.guild_id.as_str()) {
-            if let Some(token) = d["token"].as_str() {
-                voice.token = Some(token.to_string());
-            }
-            if let Some(endpoint) = d["endpoint"].as_str() {
-                voice.endpoint = Some(endpoint.trim_start_matches("wss://").to_string());
-            }
-            if voice.session_id.is_some() && voice.token.is_some() && voice.endpoint.is_some() {
-                // Токен в webview не отдаём: фронт подключение не выполняет.
-                let payload = json!({
-                    "guild_id": voice.guild_id,
-                    "channel_id": voice.channel_id,
-                    "session_id": voice.session_id,
-                    "endpoint": voice.endpoint,
-                });
-                log::info!(
-                    "Голосовое подключение собрано: guild={} channel={} session={} token=<redacted>",
-                    voice.guild_id, voice.channel_id, voice.session_id.clone().unwrap_or_default()
-                );
-                let _ = app.emit("voice_channel_ready", payload);
-
-                // Авто-подключение из бэкенда: свежий токен одноразовый, тратим сразу.
-                let app2 = app.clone();
-                let discord_state = clone_state(&state);
-                let guild_ids = voice.guild_id.clone();
-                let channel_ids = voice.channel_id.clone();
-                let session_id = voice.session_id.clone().unwrap();
-                let token = voice.token.clone().unwrap();
-                let endpoint = voice.endpoint.clone().unwrap();
-                tokio::spawn(async move {
-                    if let Err(e) = connect_voice(
-                        app2, discord_state, guild_ids, channel_ids, session_id, token, endpoint,
-                    ).await {
-                        log::error!("Voice error: {e}");
-                    }
-                });
+    {
+        let mut guard = state.voice.lock().unwrap();
+        if let Some(voice) = guard.as_mut() {
+            if d["guild_id"].as_str() == Some(voice.guild_id.as_str()) {
+                if let Some(token) = d["token"].as_str() {
+                    voice.token = Some(token.to_string());
+                }
+                if let Some(endpoint) = d["endpoint"].as_str() {
+                    voice.endpoint = Some(endpoint.trim_start_matches("wss://").to_string());
+                }
             }
         }
     }
+    // Тройка могла собраться здесь (токен пришёл последним) — общий триггер.
+    maybe_connect_voice(app, &state);
+}
+
+/// Общий триггер автоподключения: запускается, когда тройка
+/// (session, token, endpoint) собрана — из VOICE_STATE_UPDATE или
+/// VOICE_SERVER_UPDATE (Discord вправе прислать их в любом порядке).
+/// Дедуп по паре (session, token) — внутри connect_voice, под локом.
+fn maybe_connect_voice(app: &AppHandle, state: &State<'_, DiscordState>) {
+    // Токен в webview не отдаём: фронт подключение не выполняет.
+    let (guild_ids, channel_ids, session_id, token, endpoint) = {
+        let mut guard = state.voice.lock().unwrap();
+        let Some(voice) = guard.as_mut() else { return };
+        if !(voice.session_id.is_some() && voice.token.is_some() && voice.endpoint.is_some()) {
+            return;
+        }
+        log::info!(
+            "Голосовое подключение собрано: guild={} channel={} session={} token=<redacted>",
+            voice.guild_id, voice.channel_id, voice.session_id.clone().unwrap_or_default()
+        );
+        let _ = app.emit(
+            "voice_channel_ready",
+            json!({
+                "guild_id": voice.guild_id,
+                "channel_id": voice.channel_id,
+                "session_id": voice.session_id,
+                "endpoint": voice.endpoint,
+            }),
+        );
+        (
+            voice.guild_id.clone(),
+            voice.channel_id.clone(),
+            voice.session_id.clone().unwrap(),
+            voice.token.clone().unwrap(),
+            voice.endpoint.clone().unwrap(),
+        )
+    };
+
+    // Авто-подключение из бэкенда: свежий токен одноразовый, тратим сразу.
+    let app2 = app.clone();
+    let discord_state = clone_state(state);
+    tokio::spawn(async move {
+        if let Err(e) = connect_voice(
+            app2, discord_state, guild_ids, channel_ids, session_id, token, endpoint,
+        ).await {
+            log::error!("Voice error: {e}");
+        }
+    });
 }
 
 #[command]

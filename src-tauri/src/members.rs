@@ -113,10 +113,12 @@ pub async fn get_guild_members(
 
     // 4) Ждём SYNC по всем запрошенным диапазонам.
     let deadline = Instant::now() + FETCH_TIMEOUT;
+    let mut complete = false;
     loop {
         {
             let st = slot.state.lock().unwrap();
             if st.done {
+                complete = true;
                 break;
             }
         }
@@ -129,8 +131,14 @@ pub async fn get_guild_members(
     }
 
     // 5) Забираем результат и отписываемся от диапазонов.
+    //    remove только «нашего» слота: параллельный вызов для того же guild'а
+    //    мог уже заменить его в map — чужой слот стирать нельзя (иначе его
+    //    ожидание никогда не завершится).
     let ranges = {
-        state.member_fetch.fetches.lock().unwrap().remove(&guild_id);
+        let mut map = state.member_fetch.fetches.lock().unwrap();
+        if map.get(&guild_id).is_some_and(|cur| Arc::ptr_eq(cur, &slot)) {
+            map.remove(&guild_id);
+        }
         let st = slot.state.lock().unwrap();
         st.ranges.clone()
     };
@@ -198,7 +206,9 @@ pub async fn get_guild_members(
         }
     }
 
-    {
+    // Кэшируем только полный ответ: таймаутный (частичный) список протух бы
+    // 60с с недостающими участниками.
+    if complete {
         let mut cache = state.member_fetch.cache.lock().unwrap();
         cache.insert(guild_id.clone(), (Instant::now(), groups.clone()));
     }

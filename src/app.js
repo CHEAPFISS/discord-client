@@ -928,6 +928,9 @@ function handleVoiceStatus(p) {
     renderVoiceMembers();
     paintVoiceButtons();
   } else if (p.status === "joining") {
+    state.micMuted = false;
+    state.deafened = false;
+    paintVoiceButtons();
     setVoiceStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C\u2026");
   } else if (p.status === "connected") {
     setVoiceStatus("\u0413\u043E\u043B\u043E\u0441: \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E (DAVE/E2EE) \u{1F3A7}");

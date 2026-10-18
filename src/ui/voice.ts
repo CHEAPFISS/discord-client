@@ -96,6 +96,11 @@ export function handleVoiceStatus(p: VoiceStatusPayload): void {
     renderVoiceMembers();
     paintVoiceButtons();
   } else if (p.status === 'joining') {
+    // Смена канала (join без 'left'): бэкенд сбрасывает mute/deaf на входе —
+    // кнопки синхронизируем здесь, иначе UI показывает протухший мьют.
+    state.micMuted = false;
+    state.deafened = false;
+    paintVoiceButtons();
     setVoiceStatus('Подключаюсь…');
   } else if (p.status === 'connected') {
     setVoiceStatus('Голос: подключено (DAVE/E2EE) 🎧');

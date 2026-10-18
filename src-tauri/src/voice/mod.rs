@@ -57,6 +57,14 @@ pub(crate) async fn join_voice_channel(
     // подключения будет гасить приём звука и обводку).
     state.self_mute.store(false, Ordering::SeqCst);
     state.self_deaf.store(false, Ordering::SeqCst);
+    // Флаги сброшены — локальную паузу захвата снимаем тоже (мьют от прошлого
+    // канала иначе переживёт смену: UI unmuted, а микрофон молчит).
+    let mic = state.mic_sender.lock().unwrap().clone();
+    if let Some(mic) = mic {
+        if let Err(e) = mic.set_paused(false).await {
+            log::warn!("Join (снятие паузы микрофона): {e}");
+        }
+    }
     {
         let mut voice = state.voice.lock().unwrap();
         *voice = Some(discord_client::VoiceData {
@@ -484,6 +492,10 @@ pub(crate) fn request_voice_rejoin(app: &AppHandle, state: &DiscordState) {
         .as_ref()
         .map(|v| (v.guild_id.clone(), v.channel_id.clone()));
     let Some((guild_id, channel_id)) = target else { return };
+    // Актуальные флаги вместо жёстких false/false — re-join не должен
+    // размьючивать/разглушать (состояние живёт в атомиках, см. set_self_mute).
+    let self_mute = state.self_mute.load(Ordering::SeqCst);
+    let self_deaf = state.self_deaf.load(Ordering::SeqCst);
     log::info!("Voice: запрашиваю свежую voice-пару (re-join #{attempts})");
     let app = app.clone();
     tokio::spawn(async move {
@@ -493,8 +505,8 @@ pub(crate) fn request_voice_rejoin(app: &AppHandle, state: &DiscordState) {
             "d": {
                 "guild_id": guild_id,
                 "channel_id": channel_id,
-                "self_mute": false,
-                "self_deaf": false
+                "self_mute": self_mute,
+                "self_deaf": self_deaf
             }
         });
         if let Err(e) = sender.send(op4).await {
