@@ -1,6 +1,6 @@
 // Колонка участников сервера: группы и порядок — как их прислал Discord
 // (hoist-роли + «В сети»/«Не в сети»), presence-статусы, бейдж «БОТ»,
-// пометка «в голосовом канале».
+// «🔊 В голосовом чате» — только если никакого статуса нет.
 
 import { api, type Member } from '../api';
 import { el } from '../dom';
@@ -213,22 +213,22 @@ function memberRow(m: Member): HTMLElement {
   }
   body.appendChild(name);
 
-  // Rich Presence: кастом-статус и активность (игра/стрим/Spotify…)
-  for (const line of activityLines(m.user_id)) {
+  // Статус — одна строка: кастом-статус либо активность (как в Discord).
+  // Голосовая строка — только фолбэк, если статуса нет вовсе (в официальном
+  // клиенте у людей со статусом «в голосовом чате» не выводится).
+  const lines = activityLines(m.user_id);
+  if (lines.length > 0) {
+    for (const line of lines) {
+      const sub = document.createElement('div');
+      sub.className = 'member-sub';
+      sub.textContent = line.text;
+      if (line.title) sub.title = line.title;
+      body.appendChild(sub);
+    }
+  } else if (state.memberVoice.has(m.user_id)) {
     const sub = document.createElement('div');
     sub.className = 'member-sub';
-    sub.textContent = line.text;
-    if (line.title) sub.title = line.title;
-    body.appendChild(sub);
-  }
-
-  // «В голосовом канале» (если сидит в одном из голосовых)
-  const voiceChannel = state.memberVoice.get(m.user_id);
-  if (voiceChannel) {
-    const sub = document.createElement('div');
-    sub.className = 'member-sub';
-    const chName = state.channels.find((c) => c.id === voiceChannel)?.name;
-    sub.textContent = `🔊 ${chName ?? 'голосовой канал'}`;
+    sub.textContent = '🔊 В голосовом чате';
     body.appendChild(sub);
   }
 

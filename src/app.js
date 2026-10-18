@@ -533,19 +533,19 @@ function memberRow(m) {
     name.appendChild(bot);
   }
   body.appendChild(name);
-  for (const line of activityLines(m.user_id)) {
+  const lines = activityLines(m.user_id);
+  if (lines.length > 0) {
+    for (const line of lines) {
+      const sub = document.createElement("div");
+      sub.className = "member-sub";
+      sub.textContent = line.text;
+      if (line.title) sub.title = line.title;
+      body.appendChild(sub);
+    }
+  } else if (state.memberVoice.has(m.user_id)) {
     const sub = document.createElement("div");
     sub.className = "member-sub";
-    sub.textContent = line.text;
-    if (line.title) sub.title = line.title;
-    body.appendChild(sub);
-  }
-  const voiceChannel = state.memberVoice.get(m.user_id);
-  if (voiceChannel) {
-    const sub = document.createElement("div");
-    sub.className = "member-sub";
-    const chName = state.channels.find((c) => c.id === voiceChannel)?.name;
-    sub.textContent = `\u{1F50A} ${chName ?? "\u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u0439 \u043A\u0430\u043D\u0430\u043B"}`;
+    sub.textContent = "\u{1F50A} \u0412 \u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u043C \u0447\u0430\u0442\u0435";
     body.appendChild(sub);
   }
   row.appendChild(av);
