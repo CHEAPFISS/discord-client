@@ -159,10 +159,22 @@ pub struct GuildActivity {
     pub voice: std::collections::HashMap<String, String>,
 }
 
+/// Общий HTTP-клиент: пул соединений (раньше новый Client на каждый запрос —
+/// заново TLS-хэндшейк) + таймаут, чтобы зависший запрос не висел вечно.
+pub(crate) fn http() -> &'static reqwest::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .expect("reqwest client")
+    })
+}
+
 /// GET с bearer-токеном. Возвращает raw JSON (проверку на ошибку API делает вызывающий).
 async fn discord_get(token: &str, url: &str) -> Result<serde_json::Value, String> {
-    let client = reqwest::Client::new();
-    client
+    http()
         .get(url)
         .header("Authorization", token)
         .send()
@@ -179,8 +191,7 @@ async fn discord_post_json(
     url: &str,
     body: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let client = reqwest::Client::new();
-    client
+    http()
         .post(url)
         .header("Authorization", token)
         .json(body)

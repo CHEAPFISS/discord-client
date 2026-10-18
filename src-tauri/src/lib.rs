@@ -290,6 +290,13 @@ pub struct OAuthConfig {
 /// Читает ~/.config/discord-client/config.json
 pub fn read_oauth_config() -> Result<OAuthConfig, String> {
     let path = app_config_dir().join("config.json");
+    // В config.json лежит client_secret — приватизируем права, если файл открыт
+    // шире (иначе любой локальный пользователь прочитает секрет приложения).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
     let text = fs::read_to_string(&path).map_err(|_| {
         format!(
             "Не найден конфиг {}. Создай его с содержимым:\n{{\"client_id\": \"ТВОЙ_CLIENT_ID\", \"client_secret\": \"ТВОЙ_CLIENT_SECRET\"}}\n(id/secret из Discord Developer Portal → приложение → OAuth2)",

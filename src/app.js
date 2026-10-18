@@ -235,6 +235,9 @@ var state = {
   roles: [],
   /** user_id → presence-статус (online/idle/dnd/offline). */
   presences: /* @__PURE__ */ new Map(),
+  /** user_id, чей presence обновился живым PRESENCE_UPDATE при загрузке —
+   *  снапшот из get_guild_activity их не должен затирать (свежее у живого). */
+  presencesTouched: /* @__PURE__ */ new Set(),
   /** user_id → channel_id (кто в каком голосовом канале). */
   memberVoice: /* @__PURE__ */ new Map(),
   /** channelId → контейнер под голосовым каналом (мини-список участников). */
@@ -658,6 +661,7 @@ async function loadMembers(guildId, channelId) {
   state.members = [];
   state.memberGroups = [];
   state.roles = [];
+  state.presencesTouched = /* @__PURE__ */ new Set();
   const membersEl = el("members");
   membersEl.classList.add("active");
   membersEl.innerHTML = "";
@@ -676,7 +680,13 @@ async function loadMembers(guildId, channelId) {
     state.memberGroups = groups;
     state.members = groups.flatMap((g) => g.members);
     state.roles = roles;
-    state.presences = new Map(Object.entries(activity.presences));
+    const merged = new Map(Object.entries(activity.presences));
+    for (const uid of state.presencesTouched) {
+      const live = state.presences.get(uid);
+      if (live) merged.set(uid, live);
+    }
+    state.presences = merged;
+    state.presencesTouched = /* @__PURE__ */ new Set();
     state.memberVoice = new Map(Object.entries(activity.voice));
     state.membersLoading = false;
     renderMembers();
@@ -694,6 +704,7 @@ async function loadMembers(guildId, channelId) {
 function handlePresenceUpdate(p) {
   if (p.guild_id !== state.membersGuildId) return;
   state.presences.set(p.user_id, { status: p.status, activities: p.activities });
+  state.presencesTouched.add(p.user_id);
   if (!state.membersLoading) renderMembers();
 }
 function handleVoiceMemberUpdate(p) {

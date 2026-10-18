@@ -31,7 +31,7 @@ pub(crate) async fn login_with_token(
         return Err("Пустой токен".into());
     }
 
-    let client = reqwest::Client::new();
+    let client = crate::api::http();
     let resp: serde_json::Value = client
         .get(format!("{}/users/@me", crate::api::API_BASE))
         .header("Authorization", &token)
@@ -160,10 +160,17 @@ pub(crate) async fn start_login(state: State<'_, DiscordState>) -> Result<serde_
         .spawn()
         .map_err(|e| format!("Не удалось открыть браузер: {e}"))?;
 
-    let code = wait_for_code_on(listener, &state_token).await?;
+    // Таймаут: если пользователь не вернулся из браузера, логин не должен
+    // висеть вечно и удерживать порт 1436.
+    let code = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        wait_for_code_on(listener, &state_token),
+    )
+    .await
+    .map_err(|_| "Вход отменён: не пришёл ответ из браузера за 10 минут".to_string())??;
 
     // 2. Обмен кода на токен
-    let client = reqwest::Client::new();
+    let client = crate::api::http();
     let params = [
         ("client_id", cfg.client_id.as_str()),
         ("client_secret", cfg.client_secret.as_str()),

@@ -80,6 +80,7 @@ export async function loadMembers(guildId: string, channelId: string): Promise<v
   state.members = [];
   state.memberGroups = [];
   state.roles = [];
+  state.presencesTouched = new Set(); // новый сервер — старые «затронутые» неактуальны
   const membersEl = el('members');
   membersEl.classList.add('active');
   membersEl.innerHTML = '';
@@ -102,7 +103,15 @@ export async function loadMembers(guildId: string, channelId: string): Promise<v
     state.memberGroups = groups;
     state.members = groups.flatMap((g) => g.members);
     state.roles = roles;
-    state.presences = new Map(Object.entries(activity.presences));
+    // Слияние presence: снапшот из get_guild_activity не должен затирать
+    // живые PRESENCE_UPDATE, пришедшие пока грузились (они свежее).
+    const merged = new Map(Object.entries(activity.presences));
+    for (const uid of state.presencesTouched) {
+      const live = state.presences.get(uid);
+      if (live) merged.set(uid, live);
+    }
+    state.presences = merged;
+    state.presencesTouched = new Set();
     state.memberVoice = new Map(Object.entries(activity.voice));
     state.membersLoading = false;
     renderMembers();
@@ -122,6 +131,8 @@ export async function loadMembers(guildId: string, channelId: string): Promise<v
 export function handlePresenceUpdate(p: PresenceUpdatePayload): void {
   if (p.guild_id !== state.membersGuildId) return;
   state.presences.set(p.user_id, { status: p.status, activities: p.activities });
+  // Запоминаем, что этот user обновился «вживую» — при загрузке снапшот его не затрёт.
+  state.presencesTouched.add(p.user_id);
   if (!state.membersLoading) renderMembers();
 }
 
