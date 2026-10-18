@@ -88,6 +88,55 @@ pub struct MemberGroup {
     pub members: Vec<MemberInfo>,
 }
 
+/// Активность участника (Rich Presence): игра, стрим, Spotify, кастом-статус и т.д.
+#[derive(Debug, Clone, Serialize)]
+pub struct ActivityInfo {
+    /// Тип: 0 — играет, 1 — стримит, 2 — слушает, 3 — смотрит, 4 — кастом-статус,
+    /// 5 — соревнуется.
+    pub kind: u64,
+    pub name: String,
+    pub details: Option<String>,
+    pub state: Option<String>,
+    pub url: Option<String>,
+    /// Эмодзи кастом-статуса (юникод-символ или `:имя:` для эмодзи сервера).
+    pub emoji: Option<String>,
+}
+
+/// Presence участника: статус + активности.
+#[derive(Debug, Clone, Serialize)]
+pub struct PresenceInfo {
+    pub status: String,
+    pub activities: Vec<ActivityInfo>,
+}
+
+/// Разбор presence-объекта Discord (PRESENCE_UPDATE, READY/GUILD_CREATE,
+/// member-элементы списка участников) в PresenceInfo.
+pub fn parse_presence(p: &serde_json::Value) -> PresenceInfo {
+    let status = p["status"].as_str().unwrap_or("offline").to_string();
+    let activities = p["activities"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|a| ActivityInfo {
+                    kind: a["type"].as_u64().unwrap_or(0),
+                    name: a["name"].as_str().unwrap_or("").to_string(),
+                    details: a["details"].as_str().map(String::from),
+                    state: a["state"].as_str().map(String::from),
+                    url: a["url"].as_str().map(String::from),
+                    emoji: a["emoji"]["name"].as_str().map(|n| {
+                        if a["emoji"]["id"].is_string() {
+                            format!(":{n}:")
+                        } else {
+                            n.to_string()
+                        }
+                    }),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    PresenceInfo { status, activities }
+}
+
 #[derive(Clone)]
 pub struct DiscordState {
     pub session: Arc<Mutex<Option<DiscordSession>>>,
@@ -103,8 +152,8 @@ pub struct DiscordState {
     pub mic_sender: Arc<Mutex<Option<oto::PacedAudioSender>>>,
     /// Глухота (self_deaf): серверу в op 4 + гашение приёма звука.
     pub self_deaf: Arc<AtomicBool>,
-    /// Presence-статусы участников: guild_id → user_id → status (online/idle/dnd/offline).
-    pub presences: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
+    /// Presence участников (статус + активности): guild_id → user_id → PresenceInfo.
+    pub presences: Arc<Mutex<HashMap<String, HashMap<String, PresenceInfo>>>>,
     /// Кто в каком голосовом канале: guild_id → user_id → channel_id.
     pub voice_states: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
     /// Число участников сервера (из READY) — для расчёта диапазонов списка.

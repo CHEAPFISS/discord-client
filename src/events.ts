@@ -1,6 +1,7 @@
 // Типизированные подписки на события бэкенда (app.emit в Rust).
 
 import { listen } from '@tauri-apps/api/event';
+import type { ActivityInfo } from './api';
 
 /** MESSAGE_CREATE из Gateway (текстовый канал). */
 export interface MessageCreatePayload {
@@ -38,11 +39,13 @@ export interface VoiceChannelReadyPayload {
   endpoint: string;
 }
 
-/** PRESENCE_UPDATE: изменился статус участника (online/idle/dnd/offline). */
+/** PRESENCE_UPDATE: изменился статус участника (online/idle/dnd/offline)
+ *  и/или его активности (Rich Presence). */
 export interface PresenceUpdatePayload {
   guild_id: string;
   user_id: string;
   status: string;
+  activities: ActivityInfo[];
 }
 
 /** VOICE_STATE_UPDATE: участник вошёл/вышел из голосового канала. */

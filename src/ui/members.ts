@@ -15,7 +15,38 @@ function avatarUrl(m: Member): string | null {
 }
 
 function statusOf(userId: string): string {
-  return state.presences.get(userId) ?? 'offline';
+  return state.presences.get(userId)?.status ?? 'offline';
+}
+
+/** Строки активности под ником (как в Discord): кастом-статус и Rich Presence. */
+function activityLines(userId: string): { text: string; title?: string }[] {
+  const p = state.presences.get(userId);
+  if (!p || p.status === 'offline') return [];
+  const lines: { text: string; title?: string }[] = [];
+
+  const custom = p.activities.find((a) => a.kind === 4);
+  if (custom) {
+    const text = [custom.emoji, custom.state].filter(Boolean).join(' ').trim();
+    if (text) lines.push({ text });
+  }
+
+  const act = p.activities.find((a) => a.kind !== 4 && a.name);
+  if (act) {
+    const prefixes: Record<number, string> = {
+      0: 'Играет в',
+      1: 'Стримит',
+      2: 'Слушает',
+      3: 'Смотрит',
+      5: 'Соревнуется в',
+    };
+    const extra = [act.details, act.state].filter(Boolean).join(' — ');
+    lines.push({
+      text: `${prefixes[act.kind] ?? 'Играет в'} ${act.name}`,
+      title: extra ? `${act.name} — ${extra}` : undefined,
+    });
+  }
+
+  return lines;
 }
 
 function roleColor(color: number): string | null {
@@ -67,10 +98,10 @@ export async function loadMembers(guildId: string, channelId: string): Promise<v
   }
 }
 
-/** PRESENCE_UPDATE: обновляем статус участника. */
+/** PRESENCE_UPDATE: обновляем статус и активности участника. */
 export function handlePresenceUpdate(p: PresenceUpdatePayload): void {
   if (p.guild_id !== state.membersGuildId) return;
-  state.presences.set(p.user_id, p.status);
+  state.presences.set(p.user_id, { status: p.status, activities: p.activities });
   if (!state.membersLoading) renderMembers();
 }
 
@@ -104,37 +135,29 @@ function renderMembers(): void {
 
   const groups: Group[] = [];
 
-  if (state.memberGroups.length === 0) {
-    // Фолбэк: Discord не прислал структуру групп — делим просто по статусу.
-    const online = state.members.filter((m) => statusOf(m.user_id) !== 'offline');
-    const offline = state.members.filter((m) => statusOf(m.user_id) === 'offline');
-    if (online.length > 0) groups.push({ name: 'В сети', color: null, members: online });
-    if (offline.length > 0) groups.push({ name: 'Не в сети', color: null, members: offline });
-  } else {
-    // Группы и их порядок — прямо из списка Discord (hoist-роли по иерархии,
-    // затем «online»/«offline»). Внутри групп порядок Discord тоже сохраняем.
-    const roleById = new Map(state.roles.map((r) => [r.id, r]));
-    const rest: Member[] = [];
-    for (const g of state.memberGroups) {
-      if (g.id === 'online' || g.id === 'offline') {
-        rest.push(...g.members);
-        continue;
-      }
-      if (g.members.length === 0) continue;
-      const role = roleById.get(g.id);
-      groups.push({
-        name: role?.name ?? 'Участники',
-        color: role ? roleColor(role.color) : null,
-        members: g.members,
-      });
+  // Группы и их порядок — прямо из списка Discord (hoist-роли по иерархии,
+  // затем «online»/«offline»). Внутри групп порядок Discord тоже сохраняем.
+  const roleById = new Map(state.roles.map((r) => [r.id, r]));
+  const rest: Member[] = [];
+  for (const g of state.memberGroups) {
+    if (g.id === 'online' || g.id === 'offline') {
+      rest.push(...g.members);
+      continue;
     }
-    // «В сети»/«Не в сети» — по живым статусам (участник с hoist-ролью
-    // остаётся в своей роли, как в официальном клиенте).
-    const online = rest.filter((m) => statusOf(m.user_id) !== 'offline');
-    const offline = rest.filter((m) => statusOf(m.user_id) === 'offline');
-    if (online.length > 0) groups.push({ name: 'В сети', color: null, members: online });
-    if (offline.length > 0) groups.push({ name: 'Не в сети', color: null, members: offline });
+    if (g.members.length === 0) continue;
+    const role = roleById.get(g.id);
+    groups.push({
+      name: role?.name ?? 'Участники',
+      color: role ? roleColor(role.color) : null,
+      members: g.members,
+    });
   }
+  // «В сети»/«Не в сети» — по живым статусам (участник с hoist-ролью
+  // остаётся в своей роли, как в официальном клиенте).
+  const online = rest.filter((m) => statusOf(m.user_id) !== 'offline');
+  const offline = rest.filter((m) => statusOf(m.user_id) === 'offline');
+  if (online.length > 0) groups.push({ name: 'В сети', color: null, members: online });
+  if (offline.length > 0) groups.push({ name: 'Не в сети', color: null, members: offline });
 
   for (const g of groups) {
     const groupEl = document.createElement('div');
@@ -188,6 +211,15 @@ function memberRow(m: Member): HTMLElement {
     name.appendChild(bot);
   }
   body.appendChild(name);
+
+  // Rich Presence: кастом-статус и активность (игра/стрим/Spotify…)
+  for (const line of activityLines(m.user_id)) {
+    const sub = document.createElement('div');
+    sub.className = 'member-sub';
+    sub.textContent = line.text;
+    if (line.title) sub.title = line.title;
+    body.appendChild(sub);
+  }
 
   // «В голосовом канале» (если сидит в одном из голосовых)
   const voiceChannel = state.memberVoice.get(m.user_id);

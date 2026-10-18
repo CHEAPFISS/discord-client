@@ -373,7 +373,33 @@ function avatarUrl(m) {
   return `https://cdn.discordapp.com/avatars/${m.user_id}/${m.avatar}.${ext}?size=64`;
 }
 function statusOf(userId) {
-  return state.presences.get(userId) ?? "offline";
+  return state.presences.get(userId)?.status ?? "offline";
+}
+function activityLines(userId) {
+  const p = state.presences.get(userId);
+  if (!p || p.status === "offline") return [];
+  const lines = [];
+  const custom = p.activities.find((a) => a.kind === 4);
+  if (custom) {
+    const text = [custom.emoji, custom.state].filter(Boolean).join(" ").trim();
+    if (text) lines.push({ text });
+  }
+  const act = p.activities.find((a) => a.kind !== 4 && a.name);
+  if (act) {
+    const prefixes = {
+      0: "\u0418\u0433\u0440\u0430\u0435\u0442 \u0432",
+      1: "\u0421\u0442\u0440\u0438\u043C\u0438\u0442",
+      2: "\u0421\u043B\u0443\u0448\u0430\u0435\u0442",
+      3: "\u0421\u043C\u043E\u0442\u0440\u0438\u0442",
+      5: "\u0421\u043E\u0440\u0435\u0432\u043D\u0443\u0435\u0442\u0441\u044F \u0432"
+    };
+    const extra = [act.details, act.state].filter(Boolean).join(" \u2014 ");
+    lines.push({
+      text: `${prefixes[act.kind] ?? "\u0418\u0433\u0440\u0430\u0435\u0442 \u0432"} ${act.name}`,
+      title: extra ? `${act.name} \u2014 ${extra}` : void 0
+    });
+  }
+  return lines;
 }
 function roleColor(color) {
   return color ? "#" + color.toString(16).padStart(6, "0") : null;
@@ -419,7 +445,7 @@ async function loadMembers(guildId, channelId) {
 }
 function handlePresenceUpdate(p) {
   if (p.guild_id !== state.membersGuildId) return;
-  state.presences.set(p.user_id, p.status);
+  state.presences.set(p.user_id, { status: p.status, activities: p.activities });
   if (!state.membersLoading) renderMembers();
 }
 function handleVoiceMemberUpdate(p) {
@@ -442,32 +468,25 @@ function renderMembers() {
     return;
   }
   const groups = [];
-  if (state.memberGroups.length === 0) {
-    const online = state.members.filter((m) => statusOf(m.user_id) !== "offline");
-    const offline = state.members.filter((m) => statusOf(m.user_id) === "offline");
-    if (online.length > 0) groups.push({ name: "\u0412 \u0441\u0435\u0442\u0438", color: null, members: online });
-    if (offline.length > 0) groups.push({ name: "\u041D\u0435 \u0432 \u0441\u0435\u0442\u0438", color: null, members: offline });
-  } else {
-    const roleById = new Map(state.roles.map((r) => [r.id, r]));
-    const rest = [];
-    for (const g of state.memberGroups) {
-      if (g.id === "online" || g.id === "offline") {
-        rest.push(...g.members);
-        continue;
-      }
-      if (g.members.length === 0) continue;
-      const role = roleById.get(g.id);
-      groups.push({
-        name: role?.name ?? "\u0423\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u0438",
-        color: role ? roleColor(role.color) : null,
-        members: g.members
-      });
+  const roleById = new Map(state.roles.map((r) => [r.id, r]));
+  const rest = [];
+  for (const g of state.memberGroups) {
+    if (g.id === "online" || g.id === "offline") {
+      rest.push(...g.members);
+      continue;
     }
-    const online = rest.filter((m) => statusOf(m.user_id) !== "offline");
-    const offline = rest.filter((m) => statusOf(m.user_id) === "offline");
-    if (online.length > 0) groups.push({ name: "\u0412 \u0441\u0435\u0442\u0438", color: null, members: online });
-    if (offline.length > 0) groups.push({ name: "\u041D\u0435 \u0432 \u0441\u0435\u0442\u0438", color: null, members: offline });
+    if (g.members.length === 0) continue;
+    const role = roleById.get(g.id);
+    groups.push({
+      name: role?.name ?? "\u0423\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u0438",
+      color: role ? roleColor(role.color) : null,
+      members: g.members
+    });
   }
+  const online = rest.filter((m) => statusOf(m.user_id) !== "offline");
+  const offline = rest.filter((m) => statusOf(m.user_id) === "offline");
+  if (online.length > 0) groups.push({ name: "\u0412 \u0441\u0435\u0442\u0438", color: null, members: online });
+  if (offline.length > 0) groups.push({ name: "\u041D\u0435 \u0432 \u0441\u0435\u0442\u0438", color: null, members: offline });
   for (const g of groups) {
     const groupEl = document.createElement("div");
     groupEl.className = "member-group";
@@ -515,6 +534,13 @@ function memberRow(m) {
     name.appendChild(bot);
   }
   body.appendChild(name);
+  for (const line of activityLines(m.user_id)) {
+    const sub = document.createElement("div");
+    sub.className = "member-sub";
+    sub.textContent = line.text;
+    if (line.title) sub.title = line.title;
+    body.appendChild(sub);
+  }
   const voiceChannel = state.memberVoice.get(m.user_id);
   if (voiceChannel) {
     const sub = document.createElement("div");

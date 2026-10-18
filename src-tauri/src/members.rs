@@ -158,15 +158,44 @@ pub async fn get_guild_members(
                 if info.user_id.is_empty() || !seen_ids.insert(info.user_id.clone()) {
                     continue;
                 }
-                if let Some(last) = groups.last_mut() {
-                    last.members.push(info);
+                if groups.is_empty() {
+                    // Маркеров групп не встретилось — не теряем участника:
+                    // кладём в общую группу (фронт подпишет её «Участники»).
+                    groups.push(MemberGroup { id: String::new(), members: Vec::new() });
                 }
+                groups.last_mut().unwrap().members.push(info);
             }
         }
     }
     groups.retain(|g| !g.members.is_empty());
     if groups.is_empty() {
         return Err("Discord не прислал список участников".into());
+    }
+
+    // Проверка по логам: состав групп vs d.groups из GUILD_MEMBER_LIST_UPDATE,
+    // покрытие активностями (Rich Presence).
+    log::debug!(
+        "группы участников gid={guild_id}: {}",
+        groups
+            .iter()
+            .map(|g| format!(
+                "{}:{}",
+                if g.id.is_empty() { "-" } else { &g.id },
+                g.members.len()
+            ))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    {
+        let pres = state.presences.lock().unwrap();
+        if let Some(map) = pres.get(&guild_id) {
+            let with_acts = map.values().filter(|p| !p.activities.is_empty()).count();
+            log::debug!(
+                "presence gid={guild_id}: записей {}, с активностями {}",
+                map.len(),
+                with_acts
+            );
+        }
     }
 
     {

@@ -52,9 +52,27 @@ export interface Role {
   hoist: boolean;
 }
 
+/** Активность участника (Rich Presence): игра, стрим, Spotify, кастом-статус… */
+export interface ActivityInfo {
+  /** 0 — играет, 1 — стримит, 2 — слушает, 3 — смотрит, 4 — кастом-статус, 5 — соревнуется. */
+  kind: number;
+  name: string;
+  details: string | null;
+  state: string | null;
+  url: string | null;
+  /** Эмодзи кастом-статуса (юникод-символ или `:имя:`). */
+  emoji: string | null;
+}
+
+/** Presence участника: статус + активности. */
+export interface PresenceInfo {
+  status: string;
+  activities: ActivityInfo[];
+}
+
 /** Presence-статусы и голосовые состояния участников. */
 export interface GuildActivity {
-  presences: Record<string, string>;
+  presences: Record<string, PresenceInfo>;
   voice: Record<string, string>;
 }
 

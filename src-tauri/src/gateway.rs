@@ -3,7 +3,7 @@ use futures_util::{SinkExt, StreamExt};
 use tauri::{command, AppHandle, Emitter, Manager, State};
 use tokio_tungstenite::tungstenite::Message;
 
-use discord_client::{DiscordState, GatewaySender};
+use discord_client::{parse_presence, DiscordState, GatewaySender};
 use crate::voice::connect::connect_voice;
 
 /// Защита от повторного запуска: только одно соединение за раз.
@@ -291,10 +291,9 @@ async fn gateway_once(
                                 let pres_entry = pres_map.entry(gid.to_string()).or_default();
                                 if let Some(arr) = g["presences"].as_array() {
                                     for p in arr {
-                                        if let (Some(uid), Some(status)) =
-                                            (p["user"]["id"].as_str(), p["status"].as_str())
-                                        {
-                                            pres_entry.insert(uid.to_string(), status.to_string());
+                                        if let Some(uid) = p["user"]["id"].as_str() {
+                                            pres_entry
+                                                .insert(uid.to_string(), parse_presence(p));
                                         }
                                     }
                                 }
@@ -346,10 +345,8 @@ async fn gateway_once(
                             let pres_entry = pres.entry(gid.to_string()).or_default();
                             if let Some(arr) = d["presences"].as_array() {
                                 for p in arr {
-                                    if let (Some(uid), Some(status)) =
-                                        (p["user"]["id"].as_str(), p["status"].as_str())
-                                    {
-                                        pres_entry.insert(uid.to_string(), status.to_string());
+                                    if let Some(uid) = p["user"]["id"].as_str() {
+                                        pres_entry.insert(uid.to_string(), parse_presence(p));
                                     }
                                 }
                             }
@@ -373,18 +370,22 @@ async fn gateway_once(
                         let gid = d["guild_id"].as_str().unwrap_or("");
                         let uid = d["user"]["id"].as_str().unwrap_or("");
                         if !gid.is_empty() && !uid.is_empty() {
-                            let status =
-                                d["status"].as_str().unwrap_or("offline").to_string();
+                            let info = parse_presence(d);
                             state
                                 .presences
                                 .lock()
                                 .unwrap()
                                 .entry(gid.to_string())
                                 .or_default()
-                                .insert(uid.to_string(), status.clone());
+                                .insert(uid.to_string(), info.clone());
                             let _ = app.emit(
                                 "presence_update",
-                                json!({"guild_id": gid, "user_id": uid, "status": status}),
+                                json!({
+                                    "guild_id": gid,
+                                    "user_id": uid,
+                                    "status": info.status,
+                                    "activities": info.activities,
+                                }),
                             );
                         }
                     }
@@ -425,14 +426,13 @@ async fn gateway_once(
                                     for items in st.ranges.values() {
                                         for it in items {
                                             if let Some(m) = it.get("member") {
-                                                if let (Some(uid), Some(status)) = (
-                                                    m["user"]["id"].as_str(),
-                                                    m["presence"]["status"].as_str(),
-                                                ) {
-                                                    entry.insert(
-                                                        uid.to_string(),
-                                                        status.to_string(),
-                                                    );
+                                                if let Some(uid) = m["user"]["id"].as_str() {
+                                                    if m.get("presence").is_some() {
+                                                        entry.insert(
+                                                            uid.to_string(),
+                                                            parse_presence(&m["presence"]),
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }

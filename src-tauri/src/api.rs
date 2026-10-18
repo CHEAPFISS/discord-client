@@ -48,8 +48,8 @@ pub struct Role {
 /// Presence-статусы и голосовые состояния участников сервера (из gateway).
 #[derive(Debug, Serialize)]
 pub struct GuildActivity {
-    /// user_id → online/idle/dnd/offline
-    pub presences: std::collections::HashMap<String, String>,
+    /// user_id → PresenceInfo (статус + активности)
+    pub presences: std::collections::HashMap<String, discord_client::PresenceInfo>,
     /// user_id → channel_id (кто в каком голосовом канале)
     pub voice: std::collections::HashMap<String, String>,
 }
