@@ -10,7 +10,6 @@ export function showApp(username: string): void {
   el('login').style.display = 'none';
   el('app').style.display = 'flex';
   el('username').textContent = username;
-  el('userAreaName').textContent = username;
   el('avatar').textContent = username.charAt(0).toUpperCase();
   void loadGuilds();
 }

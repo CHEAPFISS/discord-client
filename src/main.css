@@ -114,31 +114,22 @@ summary:focus-visible {
   box-shadow: 0 0 8px rgba(255, 183, 77, 0.55);
 }
 
-/* --- Sidebar (сервера) --- */
-.sidebar {
-  width: 240px;
+/* --- Рейл серверов (узкая колонка, как в Discord) --- */
+.server-rail {
+  width: 72px;
+  flex: none;
   background: var(--surface-0);
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--outline);
 }
-.sidebar-header {
-  padding: 14px 16px;
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--text-high);
-  border-bottom: 1px solid var(--outline);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.servers { padding: 16px 0; overflow-y: auto; flex: 1; }
-.empty-servers { padding: 12px 20px; color: var(--text-low); font-size: 13px; text-align: center; }
+.servers { padding: 12px 0; overflow-y: auto; flex: 1; }
+.empty-servers { padding: 12px 8px; color: var(--text-low); font-size: 12px; text-align: center; }
 
 .server-item {
-  width: 52px; height: 52px;
+  width: 48px; height: 48px;
   border-radius: 50%;
-  margin: 0 auto 14px;
+  margin: 0 auto 8px;
   cursor: pointer;
   background: var(--surface-3);
   display: flex; align-items: center; justify-content: center;
@@ -158,16 +149,21 @@ summary:focus-visible {
 }
 .server-item:active { transform: scale(0.94); }
 .server-item img { width: 100%; height: 100%; border-radius: 45%; object-fit: cover; display: block; }
-.server-letter { font-size: 21px; }
+.server-letter { font-size: 19px; }
 
-/* --- Channels --- */
-.channels {
+/* --- Панель каналов (+ профиль внизу) --- */
+.channels-panel {
   width: 240px;
   flex: none;
-  overflow-y: auto;
-  padding: 16px 12px;
   background: var(--surface-1);
   border-right: 1px solid var(--outline);
+  display: flex;
+  flex-direction: column;
+}
+.channels {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 12px;
 }
 .channel-category {
   padding: 10px 10px 6px;
@@ -250,6 +246,83 @@ summary:focus-visible {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* --- Участники сервера (правая колонка) --- */
+.members {
+  width: 240px;
+  flex: none;
+  background: var(--surface-1);
+  border-left: 1px solid var(--outline);
+  overflow-y: auto;
+  padding: 12px 8px;
+  display: none;
+}
+.members.active { display: block; }
+.members-empty { padding: 12px; color: var(--text-low); font-size: 13px; text-align: center; }
+.member-group { margin-bottom: 10px; }
+.member-group-title {
+  padding: 8px 10px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-low);
+}
+.member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  border-radius: var(--radius-s);
+}
+.member:hover { background: var(--surface-3); }
+.member-avatar { position: relative; width: 32px; height: 32px; flex: none; }
+.member-avatar img { width: 32px; height: 32px; border-radius: 50%; display: block; object-fit: cover; }
+.member-letter {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--surface-4);
+  color: var(--text-high);
+  font-size: 13px;
+  font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+}
+.presence {
+  position: absolute;
+  right: -2px; bottom: -2px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--surface-1);
+}
+.presence.online { background: var(--success); }
+.presence.idle { background: var(--warning); }
+.presence.dnd { background: var(--danger); }
+.presence.offline { background: #6b7078; }
+.member-body { min-width: 0; flex: 1; }
+.member-name {
+  font-size: 14px;
+  color: var(--text-high);
+  display: flex; align-items: center; gap: 6px;
+  min-width: 0;
+}
+.member-name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-badge {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  border-radius: 4px;
+  padding: 1px 4px;
+  flex: none;
+}
+.member-sub {
+  font-size: 12px;
+  color: var(--text-low);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* --- Input --- */
 .input-area { padding: 0 20px 20px; }
 .input-wrapper {
@@ -296,6 +369,15 @@ textarea::placeholder { color: var(--text-low); }
   font-size: 14px;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
+}
+.user-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-high);
 }
 .logout-btn {
   margin-left: auto;

@@ -38,6 +38,20 @@ export interface VoiceChannelReadyPayload {
   endpoint: string;
 }
 
+/** PRESENCE_UPDATE: изменился статус участника (online/idle/dnd/offline). */
+export interface PresenceUpdatePayload {
+  guild_id: string;
+  user_id: string;
+  status: string;
+}
+
+/** VOICE_STATE_UPDATE: участник вошёл/вышел из голосового канала. */
+export interface VoiceMemberUpdatePayload {
+  guild_id: string;
+  user_id: string;
+  channel_id: string | null;
+}
+
 function subscribe<T>(event: string, cb: (p: T) => void): void {
   listen<T>(event, (e) => cb(e.payload)).catch((err) => {
     console.warn(`listen(${event}):`, err);
@@ -55,3 +69,9 @@ export const onVoiceStatus = (cb: (p: VoiceStatusPayload) => void): void =>
 
 export const onVoiceChannelReady = (cb: (p: VoiceChannelReadyPayload) => void): void =>
   subscribe('voice_channel_ready', cb);
+
+export const onPresenceUpdate = (cb: (p: PresenceUpdatePayload) => void): void =>
+  subscribe('presence_update', cb);
+
+export const onVoiceMemberUpdate = (cb: (p: VoiceMemberUpdatePayload) => void): void =>
+  subscribe('voice_member_update', cb);

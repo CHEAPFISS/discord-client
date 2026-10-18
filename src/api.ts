@@ -28,6 +28,30 @@ export interface ChatMessage {
   timestamp: string;
 }
 
+/** Участник сервера. */
+export interface Member {
+  user_id: string;
+  username: string;
+  avatar: string | null;
+  bot: boolean;
+  roles: string[];
+}
+
+/** Роль сервера. */
+export interface Role {
+  id: string;
+  name: string;
+  color: number;
+  position: number;
+  hoist: boolean;
+}
+
+/** Presence-статусы и голосовые состояния участников. */
+export interface GuildActivity {
+  presences: Record<string, string>;
+  voice: Record<string, string>;
+}
+
 /** Текущий пользователь. */
 export interface Me {
   user_id: string;
@@ -47,6 +71,9 @@ export const api = {
   // --- REST Discord ---
   getGuilds: () => invoke<Guild[]>('get_guilds'),
   getChannels: (guildId: string) => invoke<Channel[]>('get_channels', { guildId }),
+  getGuildMembers: (guildId: string) => invoke<Member[]>('get_guild_members', { guildId }),
+  getGuildRoles: (guildId: string) => invoke<Role[]>('get_guild_roles', { guildId }),
+  getGuildActivity: (guildId: string) => invoke<GuildActivity>('get_guild_activity', { guildId }),
   getMessages: (channelId: string) => invoke<ChatMessage[]>('get_messages', { channelId }),
   sendMessage: (channelId: string, content: string) =>
     invoke<ChatMessage>('send_message', { channelId, content }),

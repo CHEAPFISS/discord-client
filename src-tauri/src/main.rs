@@ -30,6 +30,9 @@ fn main() {
             // API
             api::get_guilds,
             api::get_channels,
+            api::get_guild_members,
+            api::get_guild_roles,
+            api::get_guild_activity,
             api::get_messages,
             api::send_message,
             // Auth

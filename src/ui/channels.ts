@@ -4,6 +4,7 @@ import { api, type Channel, type Guild } from '../api';
 import { el } from '../dom';
 import { state } from '../state';
 import { openTextChannel } from './chat';
+import { loadMembers } from './members';
 import { showError } from './toast';
 import { updateBadge } from './unread';
 import { joinVoice } from './voice';
@@ -22,8 +23,12 @@ export async function loadChannels(guild: Guild): Promise<void> {
   cat.textContent = guild.name;
   channelsEl.appendChild(cat);
 
+  // Участники грузятся параллельно с каналами.
+  void loadMembers(guild.id);
+
   try {
     const channels = await api.getChannels(guild.id);
+    state.channels = channels;
     channels.forEach((c) => {
       const div = document.createElement('div');
       div.className = `channel-item ${isVoice(c) ? 'voice' : 'text'}`;

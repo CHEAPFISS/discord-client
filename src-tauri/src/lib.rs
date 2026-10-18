@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -57,6 +58,10 @@ pub struct DiscordState {
     pub mic_sender: Arc<Mutex<Option<oto::PacedAudioSender>>>,
     /// Глухота (self_deaf): серверу в op 4 + гашение приёма звука.
     pub self_deaf: Arc<AtomicBool>,
+    /// Presence-статусы участников: guild_id → user_id → status (online/idle/dnd/offline).
+    pub presences: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
+    /// Кто в каком голосовом канале: guild_id → user_id → channel_id.
+    pub voice_states: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
 }
 
 /// Цель подключения к голосовому каналу + собранные данные авторизации.
@@ -87,6 +92,8 @@ impl Default for DiscordState {
             voice_rejoin: Arc::new(AtomicU64::new(0)),
             mic_sender: Arc::new(Mutex::new(None)),
             self_deaf: Arc::new(AtomicBool::new(false)),
+            presences: Arc::new(Mutex::new(HashMap::new())),
+            voice_states: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }

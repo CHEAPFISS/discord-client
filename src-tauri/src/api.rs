@@ -33,6 +33,40 @@ pub struct ChatMessage {
     pub timestamp: String,
 }
 
+/// Участник сервера (для колонки участников).
+#[derive(Debug, Serialize)]
+pub struct Member {
+    pub user_id: String,
+    /// Отображаемое имя: ник на сервере → global_name → username.
+    pub username: String,
+    /// Хэш аватарки для CDN Discord (None — показываем букву).
+    pub avatar: Option<String>,
+    pub bot: bool,
+    /// ID ролей участника.
+    pub roles: Vec<String>,
+}
+
+/// Роль сервера (для группировки участников по ролям).
+#[derive(Debug, Serialize)]
+pub struct Role {
+    pub id: String,
+    pub name: String,
+    /// Цвет роли числом (0 — без цвета).
+    pub color: u64,
+    pub position: i64,
+    /// Показывать роль отдельной группой в списке участников?
+    pub hoist: bool,
+}
+
+/// Presence-статусы и голосовые состояния участников сервера (из gateway).
+#[derive(Debug, Serialize)]
+pub struct GuildActivity {
+    /// user_id → online/idle/dnd/offline
+    pub presences: std::collections::HashMap<String, String>,
+    /// user_id → channel_id (кто в каком голосовом канале)
+    pub voice: std::collections::HashMap<String, String>,
+}
+
 /// GET с bearer-токеном. Возвращает raw JSON (проверку на ошибку API делает вызывающий).
 async fn discord_get(token: &str, url: &str) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::new();
@@ -123,6 +157,97 @@ pub async fn get_channels(
         return Err(api_error(&resp));
     }
     Ok(channels)
+}
+
+#[command]
+pub async fn get_guild_members(
+    state: State<'_, DiscordState>,
+    guild_id: String,
+) -> Result<Vec<Member>, String> {
+    let token = state.token().ok_or("Не залогинен")?;
+    let resp = discord_get(
+        &token,
+        &format!("{API_BASE}/guilds/{guild_id}/members?limit=1000"),
+    )
+    .await?;
+
+    let mut out = Vec::new();
+    if let Some(arr) = resp.as_array() {
+        for m in arr {
+            let u = &m["user"];
+            let username = m["nick"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .or_else(|| u["global_name"].as_str())
+                .or_else(|| u["username"].as_str())
+                .unwrap_or("")
+                .to_string();
+            out.push(Member {
+                user_id: u["id"].as_str().unwrap_or("").to_string(),
+                username,
+                avatar: u["avatar"].as_str().map(String::from),
+                bot: u["bot"].as_bool().unwrap_or(false),
+                roles: m["roles"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|r| r.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            });
+        }
+    } else {
+        return Err(api_error(&resp));
+    }
+    Ok(out)
+}
+
+#[command]
+pub async fn get_guild_roles(
+    state: State<'_, DiscordState>,
+    guild_id: String,
+) -> Result<Vec<Role>, String> {
+    let token = state.token().ok_or("Не залогинен")?;
+    let resp = discord_get(&token, &format!("{API_BASE}/guilds/{guild_id}/roles")).await?;
+
+    let mut out = Vec::new();
+    if let Some(arr) = resp.as_array() {
+        for r in arr {
+            out.push(Role {
+                id: r["id"].as_str().unwrap_or("").to_string(),
+                name: r["name"].as_str().unwrap_or("").to_string(),
+                color: r["color"].as_u64().unwrap_or(0),
+                position: r["position"].as_i64().unwrap_or(0),
+                hoist: r["hoist"].as_bool().unwrap_or(false),
+            });
+        }
+    } else {
+        return Err(api_error(&resp));
+    }
+    Ok(out)
+}
+
+#[command]
+pub async fn get_guild_activity(
+    state: State<'_, DiscordState>,
+    guild_id: String,
+) -> Result<GuildActivity, String> {
+    let presences = state
+        .presences
+        .lock()
+        .unwrap()
+        .get(&guild_id)
+        .cloned()
+        .unwrap_or_default();
+    let voice = state
+        .voice_states
+        .lock()
+        .unwrap()
+        .get(&guild_id)
+        .cloned()
+        .unwrap_or_default();
+    Ok(GuildActivity { presences, voice })
 }
 
 #[command]

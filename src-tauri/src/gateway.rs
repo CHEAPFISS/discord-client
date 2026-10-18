@@ -24,6 +24,8 @@ pub(crate) fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
         voice_rejoin: state.voice_rejoin.clone(),
         mic_sender: state.mic_sender.clone(),
         self_deaf: state.self_deaf.clone(),
+        presences: state.presences.clone(),
+        voice_states: state.voice_states.clone(),
     }
 }
 
@@ -267,6 +269,45 @@ async fn gateway_once(
                 let t = v["t"].as_str().unwrap_or("");
                 match t {
                     "READY" => {
+                        // Данные гильдий приходят прямо в READY (GUILD_CREATE для
+                        // изначальных гильдий Discord больше не шлёт): засеваем
+                        // presences и голосовые состояния из guilds[].
+                        let state: State<'_, DiscordState> = app.state();
+                        let d = &v["d"];
+                        if let Some(guilds) = d["guilds"].as_array() {
+                            let mut pres_map = state.presences.lock().unwrap();
+                            let mut vs_map = state.voice_states.lock().unwrap();
+                            for g in guilds {
+                                let gid = g["id"].as_str().unwrap_or("");
+                                if gid.is_empty() {
+                                    continue;
+                                }
+                                let pres_entry = pres_map.entry(gid.to_string()).or_default();
+                                if let Some(arr) = g["presences"].as_array() {
+                                    for p in arr {
+                                        if let (Some(uid), Some(status)) =
+                                            (p["user"]["id"].as_str(), p["status"].as_str())
+                                        {
+                                            pres_entry.insert(uid.to_string(), status.to_string());
+                                        }
+                                    }
+                                }
+                                let vs_entry = vs_map.entry(gid.to_string()).or_default();
+                                if let Some(arr) = g["voice_states"].as_array() {
+                                    for s in arr {
+                                        if let (Some(uid), Some(cid)) =
+                                            (s["user_id"].as_str(), s["channel_id"].as_str())
+                                        {
+                                            vs_entry.insert(uid.to_string(), cid.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                            log::info!(
+                                "READY: засеяно presences/voice_states для {} гильдий",
+                                guilds.len()
+                            );
+                        }
                         let _ = app.emit("gateway_status", json!({"status": "ready"}));
                     }
                     "MESSAGE_CREATE" => {
@@ -288,6 +329,59 @@ async fn gateway_once(
                     "VOICE_SERVER_UPDATE" => {
                         handle_voice_server(app, &v["d"]).await;
                     }
+                    // GUILD_CREATE приходит на каждый сервер после READY: засеваем
+                    // presences и голосовые состояния участников.
+                    "GUILD_CREATE" => {
+                        let state: State<'_, DiscordState> = app.state();
+                        let d = &v["d"];
+                        let gid = d["id"].as_str().unwrap_or("");
+                        if !gid.is_empty() {
+                            let mut pres = state.presences.lock().unwrap();
+                            let pres_entry = pres.entry(gid.to_string()).or_default();
+                            if let Some(arr) = d["presences"].as_array() {
+                                for p in arr {
+                                    if let (Some(uid), Some(status)) =
+                                        (p["user"]["id"].as_str(), p["status"].as_str())
+                                    {
+                                        pres_entry.insert(uid.to_string(), status.to_string());
+                                    }
+                                }
+                            }
+                            drop(pres);
+                            let mut vs = state.voice_states.lock().unwrap();
+                            let vs_entry = vs.entry(gid.to_string()).or_default();
+                            if let Some(arr) = d["voice_states"].as_array() {
+                                for s in arr {
+                                    if let (Some(uid), Some(cid)) =
+                                        (s["user_id"].as_str(), s["channel_id"].as_str())
+                                    {
+                                        vs_entry.insert(uid.to_string(), cid.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "PRESENCE_UPDATE" => {
+                        let state: State<'_, DiscordState> = app.state();
+                        let d = &v["d"];
+                        let gid = d["guild_id"].as_str().unwrap_or("");
+                        let uid = d["user"]["id"].as_str().unwrap_or("");
+                        if !gid.is_empty() && !uid.is_empty() {
+                            let status =
+                                d["status"].as_str().unwrap_or("offline").to_string();
+                            state
+                                .presences
+                                .lock()
+                                .unwrap()
+                                .entry(gid.to_string())
+                                .or_default()
+                                .insert(uid.to_string(), status.clone());
+                            let _ = app.emit(
+                                "presence_update",
+                                json!({"guild_id": gid, "user_id": uid, "status": status}),
+                            );
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -296,20 +390,46 @@ async fn gateway_once(
 }
 
 /// Накапливает данные голосового подключения; когда все три есть — готово.
+/// Плюс: ведёт учёт, кто из участников в каком голосовом канале (для списка участников).
 async fn handle_voice_state(app: &AppHandle, d: &serde_json::Value) {
     let state: State<'_, DiscordState> = app.state();
-    let mut guard = state.voice.lock().unwrap();
-    if let Some(voice) = guard.as_mut() {
-        if d["guild_id"].as_str() == Some(voice.guild_id.as_str())
-            && d["user_id"].as_str() == Some(voice.user_id.as_str())
-        {
-            let session_id = d["session_id"].as_str().unwrap_or("").to_string();
-            if !session_id.is_empty() {
-                voice.session_id = Some(session_id);
+    {
+        let mut guard = state.voice.lock().unwrap();
+        if let Some(voice) = guard.as_mut() {
+            if d["guild_id"].as_str() == Some(voice.guild_id.as_str())
+                && d["user_id"].as_str() == Some(voice.user_id.as_str())
+            {
+                let session_id = d["session_id"].as_str().unwrap_or("").to_string();
+                if !session_id.is_empty() {
+                    voice.session_id = Some(session_id);
+                }
+                // Подключаемся только когда придёт свежий token (VOICE_SERVER_UPDATE) —
+                // иначе используем протухший и получим 4014/4022.
             }
-            // Подключаемся только когда придёт свежий token (VOICE_SERVER_UPDATE) —
-            // иначе используем протухший и получим 4014/4022.
         }
+    }
+
+    // Голосовые состояния участников (для колонки участников на фронте).
+    let gid = d["guild_id"].as_str().unwrap_or("");
+    let uid = d["user_id"].as_str().unwrap_or("");
+    if !gid.is_empty() && !uid.is_empty() {
+        let channel_id = d["channel_id"].as_str().map(String::from);
+        {
+            let mut map = state.voice_states.lock().unwrap();
+            let entry = map.entry(gid.to_string()).or_default();
+            match &channel_id {
+                Some(cid) => {
+                    entry.insert(uid.to_string(), cid.clone());
+                }
+                None => {
+                    entry.remove(uid);
+                }
+            }
+        }
+        let _ = app.emit(
+            "voice_member_update",
+            json!({"guild_id": gid, "user_id": uid, "channel_id": channel_id}),
+        );
     }
 }
 

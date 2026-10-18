@@ -131,6 +131,9 @@ var api = {
   // --- REST Discord ---
   getGuilds: () => invoke("get_guilds"),
   getChannels: (guildId) => invoke("get_channels", { guildId }),
+  getGuildMembers: (guildId) => invoke("get_guild_members", { guildId }),
+  getGuildRoles: (guildId) => invoke("get_guild_roles", { guildId }),
+  getGuildActivity: (guildId) => invoke("get_guild_activity", { guildId }),
   getMessages: (channelId) => invoke("get_messages", { channelId }),
   sendMessage: (channelId, content) => invoke("send_message", { channelId, content }),
   // --- Голос ---
@@ -196,6 +199,8 @@ var onMessageCreate = (cb) => subscribe("message_create", cb);
 var onGatewayStatus = (cb) => subscribe("gateway_status", cb);
 var onVoiceStatus = (cb) => subscribe("voice_status", cb);
 var onVoiceChannelReady = (cb) => subscribe("voice_channel_ready", cb);
+var onPresenceUpdate = (cb) => subscribe("presence_update", cb);
+var onVoiceMemberUpdate = (cb) => subscribe("voice_member_update", cb);
 
 // src/state.ts
 var state = {
@@ -211,7 +216,22 @@ var state = {
   /** channelId → количество непрочитанных. */
   unread: /* @__PURE__ */ new Map(),
   /** channelId → DOM-элемент канала (для бейджей). */
-  channelEls: {}
+  channelEls: {},
+  // --- Участники сервера (правая колонка) ---
+  /** Каналы текущего сервера (для имён голосовых каналов в списке). */
+  channels: [],
+  /** Участники текущего сервера. */
+  members: [],
+  /** Роли текущего сервера (для группировки). */
+  roles: [],
+  /** user_id → presence-статус (online/idle/dnd/offline). */
+  presences: /* @__PURE__ */ new Map(),
+  /** user_id → channel_id (кто в каком голосовом канале). */
+  memberVoice: /* @__PURE__ */ new Map(),
+  /** Сервер, для которого сейчас загружены участники. */
+  membersGuildId: null,
+  /** Идёт загрузка участников (не перерисовываем промежуточно). */
+  membersLoading: false
 };
 
 // src/ui/toast.ts
@@ -342,6 +362,179 @@ function initChatInput() {
   });
 }
 
+// src/ui/members.ts
+var STATUS_ORDER = { online: 0, idle: 1, dnd: 2, offline: 3 };
+function avatarUrl(m) {
+  if (!m.avatar) return null;
+  const ext = m.avatar.startsWith("a_") ? "gif" : "png";
+  return `https://cdn.discordapp.com/avatars/${m.user_id}/${m.avatar}.${ext}?size=64`;
+}
+function statusOf(userId) {
+  return state.presences.get(userId) ?? "offline";
+}
+function roleColor(color) {
+  return color ? "#" + color.toString(16).padStart(6, "0") : null;
+}
+async function loadMembers(guildId) {
+  state.membersGuildId = guildId;
+  state.membersLoading = true;
+  state.members = [];
+  state.roles = [];
+  const membersEl = el("members");
+  membersEl.classList.add("active");
+  membersEl.innerHTML = "";
+  const loading = document.createElement("div");
+  loading.className = "members-empty";
+  loading.textContent = "\u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044E \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u043E\u0432\u2026";
+  membersEl.appendChild(loading);
+  try {
+    const [members, roles, activity] = await Promise.all([
+      api.getGuildMembers(guildId),
+      api.getGuildRoles(guildId),
+      api.getGuildActivity(guildId)
+    ]);
+    if (state.membersGuildId !== guildId) return;
+    state.members = members;
+    state.roles = roles;
+    state.presences = new Map(Object.entries(activity.presences));
+    state.memberVoice = new Map(Object.entries(activity.voice));
+    state.membersLoading = false;
+    renderMembers();
+  } catch (e) {
+    if (state.membersGuildId !== guildId) return;
+    state.membersLoading = false;
+    membersEl.innerHTML = "";
+    const err = document.createElement("div");
+    err.className = "members-empty";
+    err.textContent = "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u043E\u0432: " + e;
+    membersEl.appendChild(err);
+  }
+}
+function handlePresenceUpdate(p) {
+  if (p.guild_id !== state.membersGuildId) return;
+  state.presences.set(p.user_id, p.status);
+  if (!state.membersLoading) renderMembers();
+}
+function handleVoiceMemberUpdate(p) {
+  if (p.guild_id !== state.membersGuildId) return;
+  if (p.channel_id) state.memberVoice.set(p.user_id, p.channel_id);
+  else state.memberVoice.delete(p.user_id);
+  if (!state.membersLoading) renderMembers();
+}
+function renderMembers() {
+  const membersEl = el("members");
+  membersEl.innerHTML = "";
+  if (state.members.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "members-empty";
+    empty.textContent = "\u041D\u0435\u0442 \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u043E\u0432";
+    membersEl.appendChild(empty);
+    return;
+  }
+  const roleById = new Map(state.roles.map((r) => [r.id, r]));
+  const hoisted = state.roles.filter((r) => r.hoist && r.position > 0).sort((a, b) => b.position - a.position);
+  const buckets = /* @__PURE__ */ new Map();
+  const rest = [];
+  for (const m of state.members) {
+    let top = null;
+    for (const rid of m.roles) {
+      const r = roleById.get(rid);
+      if (r && (!top || r.position > top.position)) top = r;
+    }
+    if (top && top.hoist && top.position > 0) {
+      let arr = buckets.get(top.id);
+      if (!arr) {
+        arr = [];
+        buckets.set(top.id, arr);
+      }
+      arr.push(m);
+    } else {
+      rest.push(m);
+    }
+  }
+  const groups = [];
+  for (const r of hoisted) {
+    const ms = buckets.get(r.id);
+    if (ms && ms.length > 0) {
+      groups.push({ name: r.name, color: roleColor(r.color), members: ms });
+    }
+  }
+  const online = rest.filter((m) => statusOf(m.user_id) !== "offline");
+  const offline = rest.filter((m) => statusOf(m.user_id) === "offline");
+  if (online.length > 0) groups.push({ name: "\u0412 \u0441\u0435\u0442\u0438", color: null, members: online });
+  if (offline.length > 0) groups.push({ name: "\u041D\u0435 \u0432 \u0441\u0435\u0442\u0438", color: null, members: offline });
+  for (const g of groups) {
+    g.members.sort((a, b) => {
+      const sa = STATUS_ORDER[statusOf(a.user_id)] ?? 3;
+      const sb = STATUS_ORDER[statusOf(b.user_id)] ?? 3;
+      if (sa !== sb) return sa - sb;
+      return a.username.localeCompare(b.username, "ru");
+    });
+    const groupEl = document.createElement("div");
+    groupEl.className = "member-group";
+    const title = document.createElement("div");
+    title.className = "member-group-title";
+    title.textContent = `${g.name} \u2014 ${g.members.length}`;
+    if (g.color) title.style.color = g.color;
+    groupEl.appendChild(title);
+    for (const m of g.members) groupEl.appendChild(memberRow(m));
+    membersEl.appendChild(groupEl);
+  }
+}
+function memberRow(m) {
+  const row = document.createElement("div");
+  row.className = "member";
+  const av = document.createElement("div");
+  av.className = "member-avatar";
+  const url = avatarUrl(m);
+  if (url) {
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = "";
+    img.onerror = () => {
+      img.remove();
+      av.prepend(letterSpan(m.username));
+    };
+    av.appendChild(img);
+  } else {
+    av.appendChild(letterSpan(m.username));
+  }
+  const dot = document.createElement("span");
+  dot.className = `presence ${statusOf(m.user_id)}`;
+  av.appendChild(dot);
+  const body = document.createElement("div");
+  body.className = "member-body";
+  const name = document.createElement("div");
+  name.className = "member-name";
+  const nameText = document.createElement("span");
+  nameText.textContent = m.username;
+  name.appendChild(nameText);
+  if (m.bot) {
+    const bot = document.createElement("span");
+    bot.className = "bot-badge";
+    bot.textContent = "\u0411\u041E\u0422";
+    name.appendChild(bot);
+  }
+  body.appendChild(name);
+  const voiceChannel = state.memberVoice.get(m.user_id);
+  if (voiceChannel) {
+    const sub = document.createElement("div");
+    sub.className = "member-sub";
+    const chName = state.channels.find((c) => c.id === voiceChannel)?.name;
+    sub.textContent = `\u{1F50A} ${chName ?? "\u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u0439 \u043A\u0430\u043D\u0430\u043B"}`;
+    body.appendChild(sub);
+  }
+  row.appendChild(av);
+  row.appendChild(body);
+  return row;
+}
+function letterSpan(name) {
+  const span = document.createElement("span");
+  span.className = "member-letter";
+  span.textContent = name.charAt(0).toUpperCase();
+  return span;
+}
+
 // src/ui/voice.ts
 function setVoiceStatus(text) {
   el("voiceStatus").textContent = text;
@@ -438,8 +631,10 @@ async function loadChannels(guild) {
   cat.className = "channel-category";
   cat.textContent = guild.name;
   channelsEl.appendChild(cat);
+  void loadMembers(guild.id);
   try {
     const channels = await api.getChannels(guild.id);
+    state.channels = channels;
     channels.forEach((c) => {
       const div = document.createElement("div");
       div.className = `channel-item ${isVoice(c) ? "voice" : "text"}`;
@@ -522,7 +717,6 @@ function showApp(username) {
   el("login").style.display = "none";
   el("app").style.display = "flex";
   el("username").textContent = username;
-  el("userAreaName").textContent = username;
   el("avatar").textContent = username.charAt(0).toUpperCase();
   void loadGuilds();
 }
@@ -605,6 +799,8 @@ onVoiceStatus((p) => handleVoiceStatus(p));
 onVoiceChannelReady(() => {
   setVoiceStatus("\u0413\u043E\u043B\u043E\u0441: \u0434\u0430\u043D\u043D\u044B\u0435 \u0441\u043E\u0431\u0440\u0430\u043D\u044B, \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C \u043A \u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u043C\u0443 \u0441\u0435\u0440\u0432\u0435\u0440\u0443\u2026");
 });
+onPresenceUpdate((p) => handlePresenceUpdate(p));
+onVoiceMemberUpdate((p) => handleVoiceMemberUpdate(p));
 initLogin();
 initChatInput();
 initVoiceControls();

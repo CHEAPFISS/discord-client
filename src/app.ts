@@ -5,13 +5,21 @@
 //   events.ts    — типизированные подписки на события бэкенда
 //   state.ts     — клиентский стейт
 //   login.ts     — экран входа + автовосстановление сессии
-//   ui/*.ts      — рендер: серверы, каналы, чат, голос, статус, уведомления
+//   ui/*.ts      — рендер: серверы, каналы, чат, участники, голос, статус, уведомления
 
 import { api } from './api';
 import { el } from './dom';
-import { onGatewayStatus, onMessageCreate, onVoiceChannelReady, onVoiceStatus } from './events';
+import {
+  onGatewayStatus,
+  onMessageCreate,
+  onPresenceUpdate,
+  onVoiceChannelReady,
+  onVoiceMemberUpdate,
+  onVoiceStatus,
+} from './events';
 import { initLogin, tryRestoreSession } from './login';
 import { appendLiveMessage, initChatInput } from './ui/chat';
+import { handlePresenceUpdate, handleVoiceMemberUpdate } from './ui/members';
 import { setGatewayStatus } from './ui/status';
 import { handleVoiceStatus, initVoiceControls, setVoiceStatus } from './ui/voice';
 
@@ -22,6 +30,8 @@ onVoiceStatus((p) => handleVoiceStatus(p));
 onVoiceChannelReady(() => {
   setVoiceStatus('Голос: данные собраны, подключаюсь к голосовому серверу…');
 });
+onPresenceUpdate((p) => handlePresenceUpdate(p));
+onVoiceMemberUpdate((p) => handleVoiceMemberUpdate(p));
 
 // --- Локальные обработчики ---
 initLogin();
