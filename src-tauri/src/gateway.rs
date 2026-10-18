@@ -617,7 +617,67 @@ async fn handle_voice_state(app: &AppHandle, d: &serde_json::Value) {
                 "self_video": self_video,
             }),
         );
+
+        // Авто-подключение к стриму (тестовый режим): если кто-то в НАШЕМ
+        // голосовом канале запустил демку, а мы её ещё не смотрим — сами шлём
+        // Watch Stream. Снимающая сторона (unwatch) — вручную через кнопку.
+        maybe_auto_watch_stream(app, &state, gid, uid, self_stream);
     }
+}
+
+/// Авто-watch: участник нашего голосового канала стримит → шлём op 20 Watch Stream.
+///
+/// Стрим-ключ: `guild:{guild_id}:{channel_id}:{owner_id}`. Смотрим максимум на
+/// ОДИН стрим одновременно (первый попавшийся); если уже что-то смотрим — молчим.
+fn maybe_auto_watch_stream(
+    app: &AppHandle,
+    state: &State<'_, DiscordState>,
+    gid: &str,
+    uid: &str,
+    self_stream: bool,
+) {
+    if !self_stream {
+        return;
+    }
+    // Мы не в голосе — Watch Stream бессмыслен (Discord требует быть в канале).
+    let (our_guild, our_channel, our_user) = {
+        let guard = state.voice.lock().unwrap();
+        match guard.as_ref() {
+            Some(v) => (v.guild_id.clone(), v.channel_id.clone(), v.user_id.clone()),
+            None => return,
+        }
+    };
+    // Стрим должен быть в том же guild И в том же голосовом канале, где мы.
+    if gid != our_guild || uid == our_user {
+        return;
+    }
+    // Стример должен сидеть в НАШЕМ канале (а не в другом канале того же guild).
+    let streamer_channel = {
+        let map = state.voice_states.lock().unwrap();
+        map.get(gid)
+            .and_then(|g| g.get(uid))
+            .map(|i| i.channel_id.clone())
+    };
+    if streamer_channel.as_deref() != Some(our_channel.as_str()) {
+        return;
+    }
+    // Уже что-то смотрим — второй стрим не подключаем.
+    if state.stream.lock().unwrap().is_some() {
+        return;
+    }
+    let stream_key = format!("guild:{gid}:{our_channel}:{uid}");
+    log::info!("Авто-watch: кто-то в нашем канале стримит → Watch Stream {stream_key}");
+    let app2 = app.clone();
+    let key = stream_key.clone();
+    tokio::spawn(async move {
+        let sender = app2.state::<GatewaySender>();
+        let op20 = serde_json::json!({ "op": 20, "d": { "stream_key": key } });
+        let _ = sender.send(op20).await;
+        let _ = app2.emit(
+            "stream_update",
+            serde_json::json!({ "watching": true, "stream_key": stream_key, "auto": true }),
+        );
+    });
 }
 
 async fn handle_voice_server(app: &AppHandle, d: &serde_json::Value) {
@@ -810,6 +870,42 @@ fn maybe_connect_voice(app: &AppHandle, state: &State<'_, DiscordState>) {
             log::error!("Voice error: {e}");
         }
     });
+
+    // Авто-watch при входе в канал: если демоны уже крутятся в нашем канале ДО
+    // нашего входа, события VOICE_STATE_UPDATE может не быть — сканируем снапшот.
+    maybe_scan_existing_streams(app, state);
+}
+
+/// Сканирует голосовые состояния участников нашего канала: если кто-то уже
+/// стримит — шлём Watch Stream (работа для случая «демка включена до нашего
+/// входа в канал»). Вызывается при готовности голосового подключения.
+fn maybe_scan_existing_streams(app: &AppHandle, state: &State<'_, DiscordState>) {
+    let (guild, channel, our_user) = {
+        let guard = state.voice.lock().unwrap();
+        match guard.as_ref() {
+            Some(v) => (v.guild_id.clone(), v.channel_id.clone(), v.user_id.clone()),
+            None => return,
+        }
+    };
+    // Первый стример в НАШЕМ канале, который не мы сами.
+    let streamer = {
+        let map = state.voice_states.lock().unwrap();
+        map.get(&guild)
+            .map(|g| {
+                g.iter()
+                    .filter(|(uid, info)| {
+                        **uid != our_user
+                            && info.self_stream
+                            && info.channel_id == channel
+                    })
+                    .map(|(uid, _)| uid.clone())
+                    .next()
+            })
+            .flatten()
+    };
+    let Some(uid) = streamer else { return };
+    // Делегируем общей логике авто-watch (она же проверит «уже смотрим» и шлёт op 20).
+    maybe_auto_watch_stream(app, state, &guild, &uid, true);
 }
 
 #[command]
