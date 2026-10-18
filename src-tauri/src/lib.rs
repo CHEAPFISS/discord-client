@@ -271,6 +271,11 @@ pub struct DiscordState {
     /// Стрим (Go Live), который мы смотрим: RTC-данные + токен/endpoint.
     /// None — стрим не смотрим.
     pub stream: Arc<Mutex<Option<StreamTarget>>>,
+    /// Хендл RTC-соединения стрима (второй коннект параллельно с голосовым).
+    pub stream_conn: Arc<Mutex<VoiceSlot>>,
+    /// Общий sender кадров в play_audio_task: голос и звук стрима играют через
+    /// ОДИН mixer (второй аудио-прибор дал бы конфликт/двойной звук).
+    pub playback_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<(u64, Vec<u8>, u8)>>>>,
 }
 
 /// Цель подключения к голосовому каналу + собранные данные авторизации.
@@ -309,6 +314,8 @@ impl Default for DiscordState {
             gateway_status: Arc::new(Mutex::new(("disconnected".to_string(), None))),
             member_fetch: Arc::new(MemberFetchHub::default()),
             stream: Arc::new(Mutex::new(None)),
+            stream_conn: Arc::new(Mutex::new(VoiceSlot::default())),
+            playback_tx: Arc::new(Mutex::new(None)),
         }
     }
 }

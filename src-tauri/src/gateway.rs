@@ -48,6 +48,8 @@ pub(crate) fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
         gateway_status: state.gateway_status.clone(),
         member_fetch: state.member_fetch.clone(),
         stream: state.stream.clone(),
+        stream_conn: state.stream_conn.clone(),
+        playback_tx: state.playback_tx.clone(),
     }
 }
 
@@ -714,6 +716,17 @@ fn handle_stream_delete(app: &AppHandle, d: &serde_json::Value) {
     let reason = d["reason"].as_str().unwrap_or("");
     log::info!("Stream Delete: key={stream_key} reason={reason}");
     *state.stream.lock().unwrap() = None;
+    // Если смотрели именно этот стрим — рвём его RTC-коннект (resets RTP/DAVE/транспорт).
+    let mine = {
+        let slot = state.stream_conn.lock().unwrap();
+        slot.session_id.as_deref() == Some(stream_key) && !stream_key.is_empty()
+    };
+    if mine {
+        let app2 = app.clone();
+        tokio::spawn(async move {
+            crate::voice::stream::disconnect_stream(&app2).await;
+        });
+    }
     let _ = app.emit(
         "stream_update",
         json!({"watching": false, "stream_key": stream_key, "reason": reason}),
@@ -732,12 +745,14 @@ fn maybe_emit_stream_ready(app: &AppHandle, state: &State<'_, DiscordState>) {
         return;
     }
     log::info!(
-        "Stream target готов: key={} rtc_server={} rtc_channel={} endpoint={:?} (подключение стрима — Шаг 1.x)",
+        "Stream target готов: key={} rtc_server={} rtc_channel={} endpoint={:?} → поднимаем RTC-коннект",
         t.stream_key,
         t.rtc_server_id.as_deref().unwrap_or("?"),
         t.rtc_channel_id.as_deref().unwrap_or("?"),
         t.endpoint
     );
+    // Обе части собраны — поднимаем второй RTC-коннект стрима (если ещё не подключены).
+    crate::voice::stream::maybe_connect_stream(app);
     let _ = app.emit(
         "stream_update",
         json!({

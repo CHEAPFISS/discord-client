@@ -189,6 +189,9 @@ pub(crate) async fn connect_voice(
     // user_id едет с кадром: у каждого участника — свой opus-декодер (общий
     // кодек путал состояние и давал «булькание» при смене говорящих).
     let (audio_tx, audio_rx) = tokio::sync::mpsc::channel::<(u64, Vec<u8>, u8)>(256);
+    // Общий sender в состояние: звук стрима (второй RTC-коннект) играет через
+    // ТОТ ЖЕ mixer — второй аудио-прибор дал бы конфликт/двойной звук.
+    *state.playback_tx.lock().unwrap() = Some(audio_tx.clone());
     tokio::spawn(async move {
         if let Err(e) = play_audio_task(audio_rx).await {
             log::warn!("Voice playback: {e}");

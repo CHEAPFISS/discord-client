@@ -7,6 +7,7 @@ use discord_client::{DiscordState, GatewaySender};
 use crate::audio::mic::MicSource;
 
 pub mod connect;
+pub mod stream;
 
 /// Лимит авто-переподключений (re-join) после 4014/4022 NeedsFreshVoiceInfo.
 pub(crate) const VOICE_REJOIN_LIMIT: u64 = 3;
@@ -124,6 +125,10 @@ pub(crate) async fn leave_voice_channel(
         let _ = sender.stop().await;
     }
     drop(active_conn);
+    // Mixer больше не нужен (насос остановлен) — стрим-звук в него уже не пойдёт.
+    *state.playback_tx.lock().unwrap() = None;
+    // Выход из голоса = выход из канала → стрим смотреть больше нельзя: рвём RTC.
+    crate::voice::stream::disconnect_stream(&app).await;
     // Обводки «говорит» из покинутого канала больше не актуальны.
     clear_speaking(&app, &state);
     // Флаги mute/deaf сбрасываем: насос останавливается, а флаги жили бы дальше
@@ -177,6 +182,7 @@ pub(crate) async fn unwatch_stream(
         let _ = sender.send(op19).await;
     }
     *state.stream.lock().unwrap() = None;
+    crate::voice::stream::disconnect_stream(&app).await;
     let _ = app.emit("stream_update", json!({"watching": false}));
     Ok(())
 }
