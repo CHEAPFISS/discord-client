@@ -25,6 +25,7 @@ pub(crate) fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
         voice_rejoin: state.voice_rejoin.clone(),
         mic_sender: state.mic_sender.clone(),
         self_deaf: state.self_deaf.clone(),
+        self_mute: state.self_mute.clone(),
         voice_speaking: state.voice_speaking.clone(),
         presences: state.presences.clone(),
         voice_states: state.voice_states.clone(),

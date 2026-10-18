@@ -195,6 +195,8 @@ pub struct DiscordState {
     pub mic_sender: Arc<Mutex<Option<oto::PacedAudioSender>>>,
     /// Глухота (self_deaf): серверу в op 4 + гашение приёма звука.
     pub self_deaf: Arc<AtomicBool>,
+    /// Мьют микрофона: гасит обводку «говорю сам» (своё аудио мы не слышим).
+    pub self_mute: Arc<AtomicBool>,
     /// Индикатор «говорит» для мини-списка голосового канала (зелёная обводка).
     pub voice_speaking: Arc<SpeakingTracker>,
     /// Presence участников (статус + активности): guild_id → user_id → PresenceInfo.
@@ -238,6 +240,7 @@ impl Default for DiscordState {
             voice_rejoin: Arc::new(AtomicU64::new(0)),
             mic_sender: Arc::new(Mutex::new(None)),
             self_deaf: Arc::new(AtomicBool::new(false)),
+            self_mute: Arc::new(AtomicBool::new(false)),
             voice_speaking: Arc::new(SpeakingTracker::new()),
             presences: Arc::new(Mutex::new(HashMap::new())),
             voice_states: Arc::new(Mutex::new(HashMap::new())),

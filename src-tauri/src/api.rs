@@ -49,6 +49,8 @@ pub struct Embed {
     pub url: Option<String>,
     pub color: Option<u64>,
     pub image: Option<String>,
+    /// gifv-эмбеды (гифки Klipy/Giphy/Tenor): Discord отдаёт mp4-версию в video.
+    pub video: Option<String>,
     pub thumbnail: Option<String>,
     pub author: Option<String>,
     pub footer: Option<String>,
@@ -97,6 +99,10 @@ pub fn parse_message(d: &serde_json::Value) -> ChatMessage {
                     url: e["url"].as_str().map(str::to_string),
                     color: e["color"].as_u64(),
                     image: e["image"]["url"].as_str().map(str::to_string),
+                    video: e["video"]["proxy_url"]
+                        .as_str()
+                        .or(e["video"]["url"].as_str())
+                        .map(str::to_string),
                     thumbnail: e["thumbnail"]["url"].as_str().map(str::to_string),
                     author: e["author"]["name"].as_str().map(str::to_string),
                     footer: e["footer"]["text"].as_str().map(str::to_string),

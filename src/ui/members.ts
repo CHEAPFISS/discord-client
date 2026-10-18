@@ -69,7 +69,7 @@ function activityLines(userId: string): { text: string; title?: string }[] {
   ];
 }
 
-function roleColor(color: number): string | null {
+export function roleColor(color: number): string | null {
   return color ? '#' + color.toString(16).padStart(6, '0') : null;
 }
 

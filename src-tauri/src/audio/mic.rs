@@ -29,8 +29,12 @@ pub(crate) const MIC_FRAME_SAMPLES: usize = 960; // 20 мс моно при 48 �
                                                  // потолка задержка растёт бесконечно (и целиком остаётся после unmute).
 pub(crate) const MIC_RING_MAX: usize = MIC_FRAME_SAMPLES * 4;
 
+/// RMS-порог «говорю сам»: своя речь не приходит по сети, обводку зажигаем по
+/// громкости кадра после шумодава (речь ≫ 0.1, остатки шума ≈ 0.001).
+const SELF_VAD_RMS: f32 = 0.04;
+
 impl MicSource {
-    pub(crate) fn new() -> Result<Self, String> {
+    pub(crate) fn new(on_loud: std::sync::Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
@@ -131,6 +135,15 @@ impl MicSource {
                                 }
                             }
                             denoise_warmed = true;
+                        }
+
+                        // 2.5) Обводка «говорю сам»: RMS кадра (после шумодава)
+                        // выше порога — зажигаем наружу; watcher сам погасит.
+                        if !mono.is_empty() {
+                            let sum: f32 = mono.iter().map(|s| s * s).sum();
+                            if (sum / mono.len() as f32).sqrt() > SELF_VAD_RMS {
+                                on_loud();
+                            }
                         }
 
                         // 3) opus 64 kbps stereo (дублируем моно в L/R, как раньше).

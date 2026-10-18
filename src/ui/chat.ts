@@ -3,6 +3,7 @@
 import { api, type Attachment, type Channel, type ChatMessage, type Embed } from '../api';
 import { el } from '../dom';
 import { state } from '../state';
+import { roleColor } from './members';
 import { showError } from './toast';
 import { updateBadge } from './unread';
 
@@ -18,11 +19,28 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
+// Упоминание <@id> → «@ник»: имя берём из списка участников сервера, цвет —
+// верхней цветной роли упомянутого (как в официальном клиенте).
+function mentionHtml(id: string): string {
+  const m = state.members.find((x) => x.user_id === id);
+  if (!m) {
+    return `<span class="mention">@${escapeHtml(id)}</span>`;
+  }
+  // Роли в member.roles идут по возрастанию — последняя цветная и есть верхняя.
+  let color: string | null = null;
+  for (let i = m.roles.length - 1; i >= 0 && !color; i--) {
+    const r = state.roles.find((x) => x.id === m.roles[i]);
+    if (r) color = roleColor(r.color);
+  }
+  const style = color ? ` style="color:${color}"` : '';
+  return `<span class="mention"${style}>@${escapeHtml(m.username)}</span>`;
+}
+
 function renderContent(rawHtml: string): string {
   return (
     rawHtml
-      // Упоминания <@id> → красивая метка @user (без API-разрешения имён)
-      .replace(/&lt;@(!?\d+)&gt;/g, '<span class="mention">@$1</span>')
+      // Упоминания <@id>/<@!id> → @ник с цветом роли
+      .replace(/&lt;@(!?)(\d+)&gt;/g, (_, _bang: string, id: string) => mentionHtml(id))
       // Спойлеры ||текст|| — скрыты до клика
       .replace(/\|\|(.+?)\|\|/gs, '<span class="spoiler">$1</span>')
   );
@@ -80,14 +98,26 @@ function embedNode(e: Embed): HTMLElement {
   }
   if (e.footer) parts.push(`<div class="embed-footer">${escapeHtml(e.footer)}</div>`);
   box.innerHTML = parts.join('');
-  if (e.image) {
+  if (e.video) {
+    // Гифки (gifv): Discord отдаёт mp4 в video — играем, как официальный клиент.
+    const video = document.createElement('video');
+    video.className = 'embed-video';
+    video.src = e.video;
+    video.autoplay = true;
+    video.muted = true;
+    video.loop = true;
+    video.playsInline = true;
+    video.onerror = () => video.remove();
+    box.appendChild(video);
+  } else if (e.image) {
     const img = document.createElement('img');
     img.className = 'embed-image';
     img.src = e.image;
     img.loading = 'lazy';
     box.appendChild(img);
   }
-  if (e.thumbnail) {
+  // Превью справа — только если нет большого медиа (как в официальном клиенте).
+  if (e.thumbnail && !e.image && !e.video) {
     box.classList.add('with-thumb');
     const th = document.createElement('img');
     th.className = 'embed-thumb';

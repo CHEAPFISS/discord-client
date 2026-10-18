@@ -53,6 +53,10 @@ pub(crate) async fn join_voice_channel(
 
     // фиксируем цель голосового подключения
     state.voice_rejoin.store(0, Ordering::SeqCst);
+    // На входе — чистые флаги mute/deaf (иначе протухшее «глухой» из прошлого
+    // подключения будет гасить приём звука и обводку).
+    state.self_mute.store(false, Ordering::SeqCst);
+    state.self_deaf.store(false, Ordering::SeqCst);
     {
         let mut voice = state.voice.lock().unwrap();
         *voice = Some(discord_client::VoiceData {
@@ -114,6 +118,10 @@ pub(crate) async fn leave_voice_channel(
     drop(active_conn);
     // Обводки «говорит» из покинутого канала больше не актуальны.
     clear_speaking(&app, &state);
+    // Флаги mute/deaf сбрасываем: насос останавливается, а флаги жили бы дальше
+    // и после rejoin глушили бы приём звука/обводку.
+    state.self_mute.store(false, Ordering::SeqCst);
+    state.self_deaf.store(false, Ordering::SeqCst);
 
     // op 4 — покинуть канал
     let op4 = json!({
@@ -145,6 +153,8 @@ pub(crate) async fn set_self_mute(
             log::warn!("Mute (локальная пауза): {e}");
         }
     }
+    // Флаг мьюта — для обводки «говорю сам» (своё аудио не приходит).
+    state.self_mute.store(muted, Ordering::SeqCst);
 
     // op 4 — сообщаем Discord; текущий self_deaf сохраняем, чтобы не сбросить глухоту.
     let deaf = state.self_deaf.load(Ordering::SeqCst);
@@ -214,13 +224,46 @@ pub(crate) async fn set_self_deaf(
 /// Подключение микрофона к живому соединению. Ото требует готовой DAVE-группы
 /// на момент attach (ошибка DaveRequired, сам не ретраит) — поэтому ретраим:
 /// в свежем канале ExecuteTransition приходит через ~сотню мс после коннекта.
+///
+/// Замыкание «зажечь обводку «говорю сам»»: своя речь не приходит по сети
+/// (AudioReceived ловит только чужую), поэтому ловим по громкости захваченных
+/// кадров (RMS-порог в MicSource). Мьют/глушение гасят; выключение делает
+/// общий watcher-таймаут (250 мс без кадров).
+fn self_speak_hook(app: &AppHandle) -> std::sync::Arc<dyn Fn() + Send + Sync> {
+    let state = app.state::<DiscordState>();
+    let self_uid: u64 = {
+        let guard = state.session.lock().unwrap();
+        guard
+            .as_ref()
+            .and_then(|s| s.user_id.parse().ok())
+            .unwrap_or(0)
+    };
+    let tracker = state.voice_speaking.clone();
+    let mute_flag = state.self_mute.clone();
+    let deaf_flag = state.self_deaf.clone();
+    let app_for_speak = app.clone();
+    std::sync::Arc::new(move || {
+        if self_uid == 0 || mute_flag.load(Ordering::Relaxed) || deaf_flag.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        if tracker.mark(self_uid) {
+            let _ = app_for_speak.emit(
+                "voice_speaking",
+                json!({"user_id": self_uid.to_string(), "speaking": true}),
+            );
+        }
+    })
+}
+
 pub(crate) async fn attach_mic_task(app: AppHandle, conn: oto::VoiceConnection) {
     let state = app.state::<DiscordState>();
+    let on_loud = self_speak_hook(&app);
     for attempt in 0..8u32 {
         if state.mic_sender.lock().unwrap().is_some() {
             return; // уже подключён (живой pacer пережил replace_voice_info)
         }
-        match MicSource::new() {
+        match MicSource::new(on_loud.clone()) {
             Ok(mic) => match conn.start_audio(mic).await {
                 Ok(sender) => {
                     state.mic_sender.lock().unwrap().replace(sender);
@@ -318,7 +361,7 @@ pub(crate) async fn mic_stats_task(app: AppHandle) {
                 snap.failure(),
             );
             // Мягкий путь: заменить источник в живой задаче аудио.
-            match MicSource::new() {
+            match MicSource::new(self_speak_hook(&app)) {
                 Ok(src) => match sender.replace_source(src).await {
                     Ok(generation) => {
                         log::info!(

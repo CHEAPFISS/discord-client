@@ -42,6 +42,8 @@ export interface Embed {
   url?: string | null;
   color?: number | null;
   image?: string | null;
+  /** gifv-эмбеды (гифки): mp4-версия из video. */
+  video?: string | null;
   thumbnail?: string | null;
   author?: string | null;
   footer?: string | null;
