@@ -18,35 +18,36 @@ function statusOf(userId: string): string {
   return state.presences.get(userId)?.status ?? 'offline';
 }
 
-/** Строки активности под ником (как в Discord): кастом-статус и Rich Presence. */
+/** Строка статуса под ником — одна, как в списке участников Discord:
+ * кастом-статус перебивает остальные активности («Custom statuses override
+ * other activity statuses in a server's members list»); если кастома нет —
+ * первая активность в том порядке, как её прислал Discord. */
 function activityLines(userId: string): { text: string; title?: string }[] {
   const p = state.presences.get(userId);
   if (!p || p.status === 'offline') return [];
-  const lines: { text: string; title?: string }[] = [];
 
   const custom = p.activities.find((a) => a.kind === 4);
   if (custom) {
     const text = [custom.emoji, custom.state].filter(Boolean).join(' ').trim();
-    if (text) lines.push({ text });
+    if (text) return [{ text }];
   }
 
   const act = p.activities.find((a) => a.kind !== 4 && a.name);
-  if (act) {
-    const prefixes: Record<number, string> = {
-      0: 'Играет в',
-      1: 'Стримит',
-      2: 'Слушает',
-      3: 'Смотрит',
-      5: 'Соревнуется в',
-    };
-    const extra = [act.details, act.state].filter(Boolean).join(' — ');
-    lines.push({
+  if (!act) return [];
+  const prefixes: Record<number, string> = {
+    0: 'Играет в',
+    1: 'Стримит',
+    2: 'Слушает',
+    3: 'Смотрит',
+    5: 'Соревнуется в',
+  };
+  const extra = [act.details, act.state].filter(Boolean).join(' — ');
+  return [
+    {
       text: `${prefixes[act.kind] ?? 'Играет в'} ${act.name}`,
       title: extra ? `${act.name} — ${extra}` : undefined,
-    });
-  }
-
-  return lines;
+    },
+  ];
 }
 
 function roleColor(color: number): string | null {

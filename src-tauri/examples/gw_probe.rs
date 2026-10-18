@@ -264,6 +264,40 @@ async fn main() {
                                     })
                                     .collect();
                                 println!("[{mode}]   items[0..8]: {}", sample.join(" "));
+                                // Порядок активностей КАК ПРИСЛАЛ DISCORD: для каждого
+                                // участника с активностями (тип:название, timestamps.start)
+                                println!("[{mode}]   === активности по участникам (порядок Discord) ===");
+                                for it in items {
+                                    let Some(m) = it.get("member") else { continue };
+                                    let uid = m["user"]["id"].as_str().unwrap_or("");
+                                    let uname = m["user"]["username"].as_str().unwrap_or("");
+                                    let Some(acts) = m["presence"]["activities"].as_array() else {
+                                        continue;
+                                    };
+                                    if acts.is_empty() {
+                                        continue;
+                                    }
+                                    let desc: Vec<String> = acts
+                                        .iter()
+                                        .map(|a| {
+                                            let kind = a["type"].as_u64().unwrap_or(999);
+                                            let name = a["name"].as_str().unwrap_or("");
+                                            let details = a["details"].as_str().unwrap_or("");
+                                            let state = a["state"].as_str().unwrap_or("");
+                                            let start = a["timestamps"]["start"]
+                                                .as_i64()
+                                                .map(|v| v.to_string())
+                                                .unwrap_or_else(|| "-".into());
+                                            format!(
+                                                "{kind}:{name}[d={details},s={state},start={start}]"
+                                            )
+                                        })
+                                        .collect();
+                                    println!(
+                                        "[{mode}]   acts {uname} ({uid}): {}",
+                                        desc.join(" | ")
+                                    );
+                                }
                             }
                         }
                         let groups: Vec<String> = d["groups"]

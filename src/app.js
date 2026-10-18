@@ -378,28 +378,27 @@ function statusOf(userId) {
 function activityLines(userId) {
   const p = state.presences.get(userId);
   if (!p || p.status === "offline") return [];
-  const lines = [];
   const custom = p.activities.find((a) => a.kind === 4);
   if (custom) {
     const text = [custom.emoji, custom.state].filter(Boolean).join(" ").trim();
-    if (text) lines.push({ text });
+    if (text) return [{ text }];
   }
   const act = p.activities.find((a) => a.kind !== 4 && a.name);
-  if (act) {
-    const prefixes = {
-      0: "\u0418\u0433\u0440\u0430\u0435\u0442 \u0432",
-      1: "\u0421\u0442\u0440\u0438\u043C\u0438\u0442",
-      2: "\u0421\u043B\u0443\u0448\u0430\u0435\u0442",
-      3: "\u0421\u043C\u043E\u0442\u0440\u0438\u0442",
-      5: "\u0421\u043E\u0440\u0435\u0432\u043D\u0443\u0435\u0442\u0441\u044F \u0432"
-    };
-    const extra = [act.details, act.state].filter(Boolean).join(" \u2014 ");
-    lines.push({
+  if (!act) return [];
+  const prefixes = {
+    0: "\u0418\u0433\u0440\u0430\u0435\u0442 \u0432",
+    1: "\u0421\u0442\u0440\u0438\u043C\u0438\u0442",
+    2: "\u0421\u043B\u0443\u0448\u0430\u0435\u0442",
+    3: "\u0421\u043C\u043E\u0442\u0440\u0438\u0442",
+    5: "\u0421\u043E\u0440\u0435\u0432\u043D\u0443\u0435\u0442\u0441\u044F \u0432"
+  };
+  const extra = [act.details, act.state].filter(Boolean).join(" \u2014 ");
+  return [
+    {
       text: `${prefixes[act.kind] ?? "\u0418\u0433\u0440\u0430\u0435\u0442 \u0432"} ${act.name}`,
       title: extra ? `${act.name} \u2014 ${extra}` : void 0
-    });
-  }
-  return lines;
+    }
+  ];
 }
 function roleColor(color) {
   return color ? "#" + color.toString(16).padStart(6, "0") : null;
