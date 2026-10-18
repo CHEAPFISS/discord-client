@@ -228,6 +228,8 @@ var state = {
   presences: /* @__PURE__ */ new Map(),
   /** user_id → channel_id (кто в каком голосовом канале). */
   memberVoice: /* @__PURE__ */ new Map(),
+  /** channelId → контейнер под голосовым каналом (мини-список участников). */
+  voiceMemberEls: {},
   /** Сервер, для которого сейчас загружены участники. */
   membersGuildId: null,
   /** Идёт загрузка участников (не перерисовываем промежуточно). */
@@ -401,6 +403,7 @@ async function loadMembers(guildId, channelId) {
     state.memberVoice = new Map(Object.entries(activity.voice));
     state.membersLoading = false;
     renderMembers();
+    renderVoiceMembers();
   } catch (e) {
     if (state.membersGuildId !== guildId) return;
     state.membersLoading = false;
@@ -420,7 +423,10 @@ function handleVoiceMemberUpdate(p) {
   if (p.guild_id !== state.membersGuildId) return;
   if (p.channel_id) state.memberVoice.set(p.user_id, p.channel_id);
   else state.memberVoice.delete(p.user_id);
-  if (!state.membersLoading) renderMembers();
+  if (!state.membersLoading) {
+    renderMembers();
+    renderVoiceMembers();
+  }
 }
 function renderMembers() {
   const membersEl = el("members");
@@ -529,11 +535,46 @@ function memberRow(m) {
   row.appendChild(body);
   return row;
 }
-function letterSpan(name) {
+function letterSpan(name, cls = "member-letter") {
   const span = document.createElement("span");
-  span.className = "member-letter";
+  span.className = cls;
   span.textContent = name.charAt(0).toUpperCase();
   return span;
+}
+function renderVoiceMembers() {
+  for (const [channelId, container] of Object.entries(state.voiceMemberEls)) {
+    container.innerHTML = "";
+    const rows = [...state.memberVoice.entries()].filter(([, cid]) => cid === channelId).map(([uid]) => state.members.find((m) => m.user_id === uid)).filter((m) => m !== void 0).sort((a, b) => a.username.localeCompare(b.username, "ru"));
+    for (const m of rows) container.appendChild(voiceMemberRow(m));
+  }
+}
+function voiceMemberRow(m) {
+  const row = document.createElement("div");
+  row.className = "voice-member";
+  const av = document.createElement("div");
+  av.className = "voice-member-avatar";
+  const url = avatarUrl(m);
+  if (url) {
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = "";
+    img.onerror = () => {
+      img.remove();
+      av.prepend(letterSpan(m.username, "voice-member-letter"));
+    };
+    av.appendChild(img);
+  } else {
+    av.appendChild(letterSpan(m.username, "voice-member-letter"));
+  }
+  const dot = document.createElement("span");
+  dot.className = `presence ${statusOf(m.user_id)}`;
+  av.appendChild(dot);
+  const name = document.createElement("span");
+  name.className = "voice-member-name";
+  name.textContent = m.username;
+  row.appendChild(av);
+  row.appendChild(name);
+  return row;
 }
 
 // src/ui/voice.ts
@@ -627,6 +668,7 @@ function isVoice(c) {
 async function loadChannels(guild) {
   const channelsEl = el("channels");
   state.currentGuildId = guild.id;
+  state.voiceMemberEls = {};
   channelsEl.innerHTML = "";
   const cat = document.createElement("div");
   cat.className = "channel-category";
@@ -659,7 +701,14 @@ async function loadChannels(guild) {
         else void openTextChannel(c);
       };
       channelsEl.appendChild(div);
+      if (isVoice(c)) {
+        const subs = document.createElement("div");
+        subs.className = "voice-members";
+        state.voiceMemberEls[c.id] = subs;
+        channelsEl.appendChild(subs);
+      }
     });
+    renderVoiceMembers();
   } catch (e) {
     showError("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u043A\u0430\u043D\u0430\u043B\u044B: " + e);
   }

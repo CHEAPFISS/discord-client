@@ -187,6 +187,32 @@ summary:focus-visible {
 .channel-item.active { background: var(--accent-dim); color: var(--accent-light); }
 .channel-item.voice .channel-name::before { content: '🔊 '; font-size: 13px; }
 .channel-item.text .channel-name::before { content: '# '; opacity: 0.6; }
+
+/* --- Мини-список участников под голосовым каналом --- */
+.voice-members { margin: -1px 0 6px; }
+.voice-members:empty { display: none; }
+.voice-member {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 8px 3px 18px;
+  margin: 1px 0;
+  border-radius: var(--radius-s);
+  font-size: 13.5px;
+  color: var(--text-mid);
+  cursor: default;
+  user-select: none;
+}
+.voice-member:hover { background: var(--surface-3); color: var(--text-high); }
+.voice-member-avatar { position: relative; width: 22px; height: 22px; flex: none; }
+.voice-member-avatar img { width: 22px; height: 22px; border-radius: 50%; display: block; object-fit: cover; }
+.voice-member-letter {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--surface-4);
+  color: var(--text-high);
+  font-size: 10px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+}
+.voice-member-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unread-badge {
   margin-left: auto;
   min-width: 18px; height: 18px;

@@ -55,6 +55,7 @@ export async function loadMembers(guildId: string, channelId: string): Promise<v
     state.memberVoice = new Map(Object.entries(activity.voice));
     state.membersLoading = false;
     renderMembers();
+    renderVoiceMembers();
   } catch (e) {
     if (state.membersGuildId !== guildId) return;
     state.membersLoading = false;
@@ -78,7 +79,10 @@ export function handleVoiceMemberUpdate(p: VoiceMemberUpdatePayload): void {
   if (p.guild_id !== state.membersGuildId) return;
   if (p.channel_id) state.memberVoice.set(p.user_id, p.channel_id);
   else state.memberVoice.delete(p.user_id);
-  if (!state.membersLoading) renderMembers();
+  if (!state.membersLoading) {
+    renderMembers();
+    renderVoiceMembers();
+  }
 }
 
 interface Group {
@@ -211,9 +215,54 @@ function memberRow(m: Member): HTMLElement {
   return row;
 }
 
-function letterSpan(name: string): HTMLElement {
+function letterSpan(name: string, cls = 'member-letter'): HTMLElement {
   const span = document.createElement('span');
-  span.className = 'member-letter';
+  span.className = cls;
   span.textContent = name.charAt(0).toUpperCase();
   return span;
+}
+
+/** Мини-список участников под голосовым каналом (как в Discord). */
+export function renderVoiceMembers(): void {
+  for (const [channelId, container] of Object.entries(state.voiceMemberEls)) {
+    container.innerHTML = '';
+    const rows = [...state.memberVoice.entries()]
+      .filter(([, cid]) => cid === channelId)
+      .map(([uid]) => state.members.find((m) => m.user_id === uid))
+      .filter((m): m is Member => m !== undefined)
+      .sort((a, b) => a.username.localeCompare(b.username, 'ru'));
+    for (const m of rows) container.appendChild(voiceMemberRow(m));
+  }
+}
+
+function voiceMemberRow(m: Member): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'voice-member';
+
+  const av = document.createElement('div');
+  av.className = 'voice-member-avatar';
+  const url = avatarUrl(m);
+  if (url) {
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = '';
+    img.onerror = () => {
+      img.remove();
+      av.prepend(letterSpan(m.username, 'voice-member-letter'));
+    };
+    av.appendChild(img);
+  } else {
+    av.appendChild(letterSpan(m.username, 'voice-member-letter'));
+  }
+  const dot = document.createElement('span');
+  dot.className = `presence ${statusOf(m.user_id)}`;
+  av.appendChild(dot);
+
+  const name = document.createElement('span');
+  name.className = 'voice-member-name';
+  name.textContent = m.username;
+
+  row.appendChild(av);
+  row.appendChild(name);
+  return row;
 }

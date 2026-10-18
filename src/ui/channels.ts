@@ -4,7 +4,7 @@ import { api, type Channel, type Guild } from '../api';
 import { el } from '../dom';
 import { state } from '../state';
 import { openTextChannel } from './chat';
-import { loadMembers } from './members';
+import { loadMembers, renderVoiceMembers } from './members';
 import { showError } from './toast';
 import { updateBadge } from './unread';
 import { joinVoice } from './voice';
@@ -17,6 +17,7 @@ export function isVoice(c: Channel): boolean {
 export async function loadChannels(guild: Guild): Promise<void> {
   const channelsEl = el('channels');
   state.currentGuildId = guild.id;
+  state.voiceMemberEls = {};
   channelsEl.innerHTML = '';
   const cat = document.createElement('div');
   cat.className = 'channel-category';
@@ -55,7 +56,16 @@ export async function loadChannels(guild: Guild): Promise<void> {
         else void openTextChannel(c);
       };
       channelsEl.appendChild(div);
+
+      // Под голосовым каналом — мини-список тех, кто в нём сидит.
+      if (isVoice(c)) {
+        const subs = document.createElement('div');
+        subs.className = 'voice-members';
+        state.voiceMemberEls[c.id] = subs;
+        channelsEl.appendChild(subs);
+      }
     });
+    renderVoiceMembers();
   } catch (e) {
     showError('Не удалось загрузить каналы: ' + e);
   }
