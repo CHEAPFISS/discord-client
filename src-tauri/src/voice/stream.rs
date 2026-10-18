@@ -198,6 +198,17 @@ async fn connect_stream_task(
                         let _ = tx.send((user_id, opus, missing as u8)).await;
                     }
                 }
+                oto::ConnectionEvent::VideoStateReceived {
+                    user_id,
+                    audio_ssrc,
+                    video_ssrc,
+                    rtx_ssrc,
+                } => {
+                    // SSRC→user маппинг для видео (приём — Фаза 2/3). Пока логируем.
+                    log::info!(
+                        "Stream (oto) Video state: user={user_id} audio_ssrc={audio_ssrc} video_ssrc={video_ssrc} rtx_ssrc={rtx_ssrc}"
+                    );
+                }
                 oto::ConnectionEvent::DaveStateChanged { opcode, before, after, .. } => {
                     log::debug!("Stream (oto) DAVE control {opcode}: {before:?} → {after:?}");
                 }
