@@ -1,13 +1,12 @@
 use serde::Deserialize;
-use serde_json::json;
 use tauri::{command, AppHandle, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use discord_client::{DiscordState, GatewaySender};
 use crate::gateway::{
-    clone_state, reset_voice_on_identity_change, restart_gateway_for_new_token,
-    GATEWAY_RELOG_MARKER,
+    clone_state, request_gateway_stop, reset_voice_on_identity_change,
+    restart_gateway_for_new_token,
 };
 
 /// Адрес callback-сервера OAuth2.
@@ -223,7 +222,7 @@ pub(crate) async fn logout(
     let st = clone_state(&state);
     reset_voice_on_identity_change(&app, &st).await;
     // останавливаем gateway-цикл (новый стартует после следующего логина)
-    let _ = sender.send(json!({"internal": GATEWAY_RELOG_MARKER})).await;
+    request_gateway_stop(&sender, std::time::Duration::from_secs(5)).await;
     state.set_session(None)
 }
 

@@ -38,6 +38,9 @@ pub(crate) async fn connect_voice(
 
     // Цель могла смениться/сняться, пока задача стояла в очереди (leave, новый join,
     // смена аккаунта): неактуальная попытка не тратит одноразовый токен и не воскрешает голос.
+    // Проверяем ПОД локом voice_connect_lock — иначе leave успевает пройти мимо и
+    // connect воскрешает голос от уже отменённой цели (зомби-канал).
+    let _guard = state.voice_connect_lock.lock().await;
     {
         let voice = state.voice.lock().unwrap();
         match voice.as_ref() {
@@ -52,8 +55,6 @@ pub(crate) async fn connect_voice(
             _ => {}
         }
     }
-
-    let _guard = state.voice_connect_lock.lock().await;
 
     // Дедуп: пара (session, token) уже применена к не-терминальному соединению.
     let dup = {

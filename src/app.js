@@ -942,10 +942,13 @@ function handleVoiceStatus(p) {
 function isVoice(c) {
   return c.kind === 2 || c.kind === 13;
 }
+var loadSeq = 0;
 async function loadChannels(guild) {
+  const seq = ++loadSeq;
   const channelsEl = el("channels");
   state.currentGuildId = guild.id;
   state.voiceMemberEls = {};
+  state.channelEls = {};
   channelsEl.innerHTML = "";
   const cat = document.createElement("div");
   cat.className = "channel-category";
@@ -953,10 +956,12 @@ async function loadChannels(guild) {
   channelsEl.appendChild(cat);
   try {
     const channels = await api.getChannels(guild.id);
+    if (seq !== loadSeq) return;
     state.channels = channels;
-    const textChannel = channels.find((c) => c.kind === 0) ?? channels[0];
+    const list = channels.filter((c) => c.kind !== 4);
+    const textChannel = channels.find((c) => c.kind === 0);
     if (textChannel) void loadMembers(guild.id, textChannel.id);
-    channels.forEach((c) => {
+    list.forEach((c) => {
       const div = document.createElement("div");
       div.className = `channel-item ${isVoice(c) ? "voice" : "text"}`;
       div.dataset.channelId = c.id;

@@ -12,6 +12,21 @@ pub(crate) static GATEWAY_RUNNING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 /// Служебный payload для rx-канала gateway: «остановись окончательно» (смена аккаунта).
 pub(crate) const GATEWAY_RELOG_MARKER: &str = "__relog__";
+/// Флаг «релогин запрошен»: маркер в rx не опрашивается во время сонов между
+/// реконнектами и внутри connect/HELLO — без этого флага restart зависал бы в
+/// ожидании, а новый старт получал бы «already-running» и шлюз молча умирал.
+pub(crate) static GATEWAY_RELOG_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Сброс `GATEWAY_RUNNING` при любом выходе задачи gateway — ранний return
+/// (нет токена) и паника в loop иначе оставляли флаг true навсегда
+/// (паника: drop future внутри задачи выполняется и при unwind).
+struct GatewayRunGuard;
+impl Drop for GatewayRunGuard {
+    fn drop(&mut self) {
+        GATEWAY_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 /// Адрес Discord Gateway v10.
 pub(crate) const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
 
@@ -59,7 +74,10 @@ pub(crate) fn get_gateway_status(state: State<'_, DiscordState>) -> serde_json::
 }
 
 /// Смена идентичности: гасим голос (oto) и голосовой стейт под старым аккаунтом.
+/// Берёт voice_connect_lock — иначе чистка идёт параллельно с активным
+/// connect_voice и старый канал воскресает уже под новым аккаунтом.
 pub(crate) async fn reset_voice_on_identity_change(app: &AppHandle, state: &DiscordState) {
+    let _connect_guard = state.voice_connect_lock.lock().await;
     let conn = {
         let mut slot = state.voice_conn.lock().unwrap();
         let conn = slot.conn.take();
@@ -78,23 +96,38 @@ pub(crate) async fn reset_voice_on_identity_change(app: &AppHandle, state: &Disc
     let _ = app.emit("voice_status", json!({"status": "left"}));
 }
 
-/// Перезапуск gateway-цикла под НОВЫМ токеном: маркер старому loop'у → ожидание → старт.
+/// Просит активный gateway-цикл выйти окончательно (релогин/выход):
+/// флаг + маркер в rx — флаг ловится даже в паузах и при connect/HELLO,
+/// маркер — когда цикл сидит в select. true = цикл остановился (или его не было).
+pub(crate) async fn request_gateway_stop(sender: &GatewaySender, wait: std::time::Duration) -> bool {
+    GATEWAY_RELOG_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    let marker = json!({"internal": GATEWAY_RELOG_MARKER});
+    let _ = sender.send(marker).await;
+    let deadline = std::time::Instant::now() + wait;
+    while GATEWAY_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+        && std::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let stopped = !GATEWAY_RUNNING.load(std::sync::atomic::Ordering::SeqCst);
+    if !stopped {
+        log::warn!("Gateway: цикл не остановился за {}мс", wait.as_millis());
+    }
+    GATEWAY_RELOG_REQUESTED.store(false, std::sync::atomic::Ordering::SeqCst);
+    stopped
+}
+
+/// Перезапуск gateway-цикла под НОВЫМ токеном: стоп → ожидание → старт.
 pub(crate) async fn restart_gateway_for_new_token(
     app: &AppHandle,
     state: &DiscordState,
     sender: &GatewaySender,
 ) {
-    // 1) просим активный loop выйти
-    let marker = json!({"internal": GATEWAY_RELOG_MARKER});
-    let _ = sender.send(marker).await;
-    // 2) ждём его остановки (до ~5с; loop проверяет маркер в rx-ветке select-а)
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while GATEWAY_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
-        && std::time::Instant::now() < deadline
-    {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    // 3) заводим новый gateway с текущей (новой) сессией
+    // 1) просим активный loop выйти и ждём ФАКТИЧЕСКОЙ остановки
+    //    (раньше — фиксированные 5с ожидания: при паузе/зависании цикл не
+    //    успевал выйти, новый старт получал «already-running» и шлюз умирал).
+    request_gateway_stop(sender, std::time::Duration::from_secs(5)).await;
+    // 2) заводим новый gateway с текущей (новой) сессией
     let app2 = app.clone();
     let state2 = state.clone();
     // sender: GatewaySender не Clone — живём через app.state::<GatewaySender>()
@@ -144,6 +177,12 @@ pub(crate) async fn gateway_loop(
 ) -> Result<(), String> {
     let mut first_pass = true;
     loop {
+        // Релогин запрошен — выходим, не переподключаясь (флаг виден даже когда
+        // маркер в rx ещё не опрашивается — см. GATEWAY_RELOG_REQUESTED).
+        if GATEWAY_RELOG_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
+            log::info!("Gateway: запрошен релогин — окончательная остановка");
+            return Ok(());
+        }
         match gateway_once(&app, &token, &mut rx).await {
             Ok(true) => {
                 log::info!("Gateway: окончательная остановка (релогин)");
@@ -154,7 +193,10 @@ pub(crate) async fn gateway_loop(
                 if !first_pass {
                     rekick_voice_if_joined(&app);
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                if sleep_unless_relog(std::time::Duration::from_secs(3)).await {
+                    log::info!("Gateway: релогин во время паузы — останавливаюсь");
+                    return Ok(());
+                }
             }
             Err(e) => {
                 log::warn!("Gateway: ошибка {e}, переподключение через 5с");
@@ -162,11 +204,27 @@ pub(crate) async fn gateway_loop(
                 if !first_pass {
                     rekick_voice_if_joined(&app);
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                if sleep_unless_relog(std::time::Duration::from_secs(5)).await {
+                    log::info!("Gateway: релогин во время паузы — останавливаюсь");
+                    return Ok(());
+                }
             }
         }
         first_pass = false;
     }
+}
+
+/// Пауза между реконнектами с ранним выходом, если запрошен релогин.
+/// true = релогин.
+async fn sleep_unless_relog(d: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + d;
+    while std::time::Instant::now() < deadline {
+        if GATEWAY_RELOG_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    false
 }
 
 /// true = остановиться окончательно (маркер релогина), false/Err = обычный reconnect-цикл.
@@ -596,14 +654,16 @@ async fn start_gateway_inner(
         // уже запущен — считаем это успехом
         return Ok("already-running".into());
     }
+    // Любой выход ниже (нет токена — ранний return; конец/паника loop) снимает флаг.
+    let run_guard = GatewayRunGuard;
 
     let token = state.token().ok_or("Не залогинен")?;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *sender.tx.lock().await = Some(tx);
 
     tokio::spawn(async move {
+        let _run_guard = run_guard;
         let _ = gateway_loop(app.clone(), token, rx).await;
-        GATEWAY_RUNNING.store(false, Ordering::SeqCst);
     });
 
     Ok("started".into())
