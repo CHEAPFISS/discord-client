@@ -1,13 +1,11 @@
-// Колонка участников сервера: группировка по ролям (как в Discord),
-// presence-статусы, бейдж «БОТ», пометка «в голосовом канале».
+// Колонка участников сервера: группы и порядок — как их прислал Discord
+// (hoist-роли + «В сети»/«Не в сети»), presence-статусы, бейдж «БОТ»,
+// пометка «в голосовом канале».
 
-import { api, type Member, type Role } from '../api';
+import { api, type Member } from '../api';
 import { el } from '../dom';
 import type { PresenceUpdatePayload, VoiceMemberUpdatePayload } from '../events';
 import { state } from '../state';
-
-/** Порядок статусов для сортировки (как в Discord). */
-const STATUS_ORDER: Record<string, number> = { online: 0, idle: 1, dnd: 2, offline: 3 };
 
 /** URL аватарки с CDN Discord (animated → .gif). */
 function avatarUrl(m: Member): string | null {
@@ -29,6 +27,7 @@ export async function loadMembers(guildId: string, channelId: string): Promise<v
   state.membersGuildId = guildId;
   state.membersLoading = true;
   state.members = [];
+  state.memberGroups = [];
   state.roles = [];
   const membersEl = el('members');
   membersEl.classList.add('active');
@@ -41,7 +40,7 @@ export async function loadMembers(guildId: string, channelId: string): Promise<v
   try {
     // Список участников приходит через gateway (op 37); он же засеял
     // свежие presence-статусы — активность читаем ПОСЛЕ него.
-    const members = await api.getGuildMembers(guildId, channelId);
+    const groups = await api.getGuildMembers(guildId, channelId);
     // Пока грузились — могли переключить сервер.
     if (state.membersGuildId !== guildId) return;
     const [roles, activity] = await Promise.all([
@@ -49,7 +48,8 @@ export async function loadMembers(guildId: string, channelId: string): Promise<v
       api.getGuildActivity(guildId),
     ]);
     if (state.membersGuildId !== guildId) return;
-    state.members = members;
+    state.memberGroups = groups;
+    state.members = groups.flatMap((g) => g.members);
     state.roles = roles;
     state.presences = new Map(Object.entries(activity.presences));
     state.memberVoice = new Map(Object.entries(activity.voice));
@@ -102,52 +102,41 @@ function renderMembers(): void {
     return;
   }
 
-  // Группы = hoist-роли (по position, сверху вниз) + «В сети» / «Не в сети».
-  const roleById = new Map(state.roles.map((r) => [r.id, r]));
-  const hoisted = state.roles
-    .filter((r) => r.hoist && r.position > 0)
-    .sort((a, b) => b.position - a.position);
-
-  const buckets = new Map<string, Member[]>(); // role_id → участники
-  const rest: Member[] = [];
-  for (const m of state.members) {
-    let top: Role | null = null;
-    for (const rid of m.roles) {
-      const r = roleById.get(rid);
-      if (r && (!top || r.position > top.position)) top = r;
-    }
-    if (top && top.hoist && top.position > 0) {
-      let arr = buckets.get(top.id);
-      if (!arr) {
-        arr = [];
-        buckets.set(top.id, arr);
-      }
-      arr.push(m);
-    } else {
-      rest.push(m);
-    }
-  }
-
   const groups: Group[] = [];
-  for (const r of hoisted) {
-    const ms = buckets.get(r.id);
-    if (ms && ms.length > 0) {
-      groups.push({ name: r.name, color: roleColor(r.color), members: ms });
+
+  if (state.memberGroups.length === 0) {
+    // Фолбэк: Discord не прислал структуру групп — делим просто по статусу.
+    const online = state.members.filter((m) => statusOf(m.user_id) !== 'offline');
+    const offline = state.members.filter((m) => statusOf(m.user_id) === 'offline');
+    if (online.length > 0) groups.push({ name: 'В сети', color: null, members: online });
+    if (offline.length > 0) groups.push({ name: 'Не в сети', color: null, members: offline });
+  } else {
+    // Группы и их порядок — прямо из списка Discord (hoist-роли по иерархии,
+    // затем «online»/«offline»). Внутри групп порядок Discord тоже сохраняем.
+    const roleById = new Map(state.roles.map((r) => [r.id, r]));
+    const rest: Member[] = [];
+    for (const g of state.memberGroups) {
+      if (g.id === 'online' || g.id === 'offline') {
+        rest.push(...g.members);
+        continue;
+      }
+      if (g.members.length === 0) continue;
+      const role = roleById.get(g.id);
+      groups.push({
+        name: role?.name ?? 'Участники',
+        color: role ? roleColor(role.color) : null,
+        members: g.members,
+      });
     }
+    // «В сети»/«Не в сети» — по живым статусам (участник с hoist-ролью
+    // остаётся в своей роли, как в официальном клиенте).
+    const online = rest.filter((m) => statusOf(m.user_id) !== 'offline');
+    const offline = rest.filter((m) => statusOf(m.user_id) === 'offline');
+    if (online.length > 0) groups.push({ name: 'В сети', color: null, members: online });
+    if (offline.length > 0) groups.push({ name: 'Не в сети', color: null, members: offline });
   }
-  const online = rest.filter((m) => statusOf(m.user_id) !== 'offline');
-  const offline = rest.filter((m) => statusOf(m.user_id) === 'offline');
-  if (online.length > 0) groups.push({ name: 'В сети', color: null, members: online });
-  if (offline.length > 0) groups.push({ name: 'Не в сети', color: null, members: offline });
 
   for (const g of groups) {
-    g.members.sort((a, b) => {
-      const sa = STATUS_ORDER[statusOf(a.user_id)] ?? 3;
-      const sb = STATUS_ORDER[statusOf(b.user_id)] ?? 3;
-      if (sa !== sb) return sa - sb;
-      return a.username.localeCompare(b.username, 'ru');
-    });
-
     const groupEl = document.createElement('div');
     groupEl.className = 'member-group';
     const title = document.createElement('div');

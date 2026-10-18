@@ -222,6 +222,8 @@ var state = {
   channels: [],
   /** Участники текущего сервера. */
   members: [],
+  /** Группы участников в порядке отображения Discord (hoist-роли + online/offline). */
+  memberGroups: [],
   /** Роли текущего сервера (для группировки). */
   roles: [],
   /** user_id → presence-статус (online/idle/dnd/offline). */
@@ -365,7 +367,6 @@ function initChatInput() {
 }
 
 // src/ui/members.ts
-var STATUS_ORDER = { online: 0, idle: 1, dnd: 2, offline: 3 };
 function avatarUrl(m) {
   if (!m.avatar) return null;
   const ext = m.avatar.startsWith("a_") ? "gif" : "png";
@@ -381,6 +382,7 @@ async function loadMembers(guildId, channelId) {
   state.membersGuildId = guildId;
   state.membersLoading = true;
   state.members = [];
+  state.memberGroups = [];
   state.roles = [];
   const membersEl = el("members");
   membersEl.classList.add("active");
@@ -390,14 +392,15 @@ async function loadMembers(guildId, channelId) {
   loading.textContent = "\u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044E \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u043E\u0432\u2026";
   membersEl.appendChild(loading);
   try {
-    const members = await api.getGuildMembers(guildId, channelId);
+    const groups = await api.getGuildMembers(guildId, channelId);
     if (state.membersGuildId !== guildId) return;
     const [roles, activity] = await Promise.all([
       api.getGuildRoles(guildId),
       api.getGuildActivity(guildId)
     ]);
     if (state.membersGuildId !== guildId) return;
-    state.members = members;
+    state.memberGroups = groups;
+    state.members = groups.flatMap((g) => g.members);
     state.roles = roles;
     state.presences = new Map(Object.entries(activity.presences));
     state.memberVoice = new Map(Object.entries(activity.voice));
@@ -438,45 +441,34 @@ function renderMembers() {
     membersEl.appendChild(empty);
     return;
   }
-  const roleById = new Map(state.roles.map((r) => [r.id, r]));
-  const hoisted = state.roles.filter((r) => r.hoist && r.position > 0).sort((a, b) => b.position - a.position);
-  const buckets = /* @__PURE__ */ new Map();
-  const rest = [];
-  for (const m of state.members) {
-    let top = null;
-    for (const rid of m.roles) {
-      const r = roleById.get(rid);
-      if (r && (!top || r.position > top.position)) top = r;
-    }
-    if (top && top.hoist && top.position > 0) {
-      let arr = buckets.get(top.id);
-      if (!arr) {
-        arr = [];
-        buckets.set(top.id, arr);
-      }
-      arr.push(m);
-    } else {
-      rest.push(m);
-    }
-  }
   const groups = [];
-  for (const r of hoisted) {
-    const ms = buckets.get(r.id);
-    if (ms && ms.length > 0) {
-      groups.push({ name: r.name, color: roleColor(r.color), members: ms });
+  if (state.memberGroups.length === 0) {
+    const online = state.members.filter((m) => statusOf(m.user_id) !== "offline");
+    const offline = state.members.filter((m) => statusOf(m.user_id) === "offline");
+    if (online.length > 0) groups.push({ name: "\u0412 \u0441\u0435\u0442\u0438", color: null, members: online });
+    if (offline.length > 0) groups.push({ name: "\u041D\u0435 \u0432 \u0441\u0435\u0442\u0438", color: null, members: offline });
+  } else {
+    const roleById = new Map(state.roles.map((r) => [r.id, r]));
+    const rest = [];
+    for (const g of state.memberGroups) {
+      if (g.id === "online" || g.id === "offline") {
+        rest.push(...g.members);
+        continue;
+      }
+      if (g.members.length === 0) continue;
+      const role = roleById.get(g.id);
+      groups.push({
+        name: role?.name ?? "\u0423\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u0438",
+        color: role ? roleColor(role.color) : null,
+        members: g.members
+      });
     }
+    const online = rest.filter((m) => statusOf(m.user_id) !== "offline");
+    const offline = rest.filter((m) => statusOf(m.user_id) === "offline");
+    if (online.length > 0) groups.push({ name: "\u0412 \u0441\u0435\u0442\u0438", color: null, members: online });
+    if (offline.length > 0) groups.push({ name: "\u041D\u0435 \u0432 \u0441\u0435\u0442\u0438", color: null, members: offline });
   }
-  const online = rest.filter((m) => statusOf(m.user_id) !== "offline");
-  const offline = rest.filter((m) => statusOf(m.user_id) === "offline");
-  if (online.length > 0) groups.push({ name: "\u0412 \u0441\u0435\u0442\u0438", color: null, members: online });
-  if (offline.length > 0) groups.push({ name: "\u041D\u0435 \u0432 \u0441\u0435\u0442\u0438", color: null, members: offline });
   for (const g of groups) {
-    g.members.sort((a, b) => {
-      const sa = STATUS_ORDER[statusOf(a.user_id)] ?? 3;
-      const sb = STATUS_ORDER[statusOf(b.user_id)] ?? 3;
-      if (sa !== sb) return sa - sb;
-      return a.username.localeCompare(b.username, "ru");
-    });
     const groupEl = document.createElement("div");
     groupEl.className = "member-group";
     const title = document.createElement("div");

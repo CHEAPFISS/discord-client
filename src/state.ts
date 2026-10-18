@@ -1,6 +1,6 @@
 // Клиентский стейт (единственный мутабельный объект на всё приложение).
 
-import type { Channel, Member, Role } from './api';
+import type { Channel, Member, MemberGroup, Role } from './api';
 
 export const state = {
   /** Открытый сервер (нужен для join_voice_channel). */
@@ -22,6 +22,8 @@ export const state = {
   channels: [] as Channel[],
   /** Участники текущего сервера. */
   members: [] as Member[],
+  /** Группы участников в порядке отображения Discord (hoist-роли + online/offline). */
+  memberGroups: [] as MemberGroup[],
   /** Роли текущего сервера (для группировки). */
   roles: [] as Role[],
   /** user_id → presence-статус (online/idle/dnd/offline). */

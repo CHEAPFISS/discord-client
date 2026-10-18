@@ -53,8 +53,9 @@ pub struct FetchSlot {
 
 #[derive(Default)]
 pub struct FetchState {
-    /// Объекты членов (raw JSON из элемента списка) — конвертируем при выдаче.
-    pub members: Vec<serde_json::Value>,
+    /// Элементы SYNC по диапазонам (start → `{"group":…}` / `{"member":…}`
+    /// в порядке отображения Discord) — из них собираем группы при выдаче.
+    pub ranges: std::collections::BTreeMap<i64, Vec<serde_json::Value>>,
     /// Начала диапазонов, по которым уже пришёл SYNC.
     pub seen: std::collections::HashSet<i64>,
     pub done: bool,
@@ -64,8 +65,8 @@ pub struct FetchState {
 #[derive(Default)]
 pub struct MemberFetchHub {
     pub fetches: Mutex<HashMap<String, Arc<FetchSlot>>>,
-    /// guild_id → (когда, готовый список) — чтобы не дёргать gateway на каждый клик.
-    pub cache: Mutex<HashMap<String, (std::time::Instant, Vec<MemberInfo>)>>,
+    /// guild_id → (когда, готовые группы) — чтобы не дёргать gateway на каждый клик.
+    pub cache: Mutex<HashMap<String, (std::time::Instant, Vec<MemberGroup>)>>,
 }
 
 /// Участник сервера (общая структура для фронта).
@@ -77,6 +78,14 @@ pub struct MemberInfo {
     pub avatar: Option<String>,
     pub bot: bool,
     pub roles: Vec<String>,
+}
+
+/// Группа списка участников, как её прислал Discord:
+/// id роли (hoist) либо "online"/"offline".
+#[derive(Debug, Clone, Serialize)]
+pub struct MemberGroup {
+    pub id: String,
+    pub members: Vec<MemberInfo>,
 }
 
 #[derive(Clone)]

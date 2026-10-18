@@ -231,7 +231,39 @@ async fn main() {
                                     println!(
                                         "[{mode}]   presence у member-элементов: {with_pres} (у первого: {has_pres})"
                                     );
+                                    if let Some(mi) = items
+                                        .iter()
+                                        .find(|it| it["member"].get("presence").is_some())
+                                    {
+                                        let p = &mi["member"]["presence"];
+                                        let pk: Vec<String> = p
+                                            .as_object()
+                                            .map(|o| o.keys().cloned().collect())
+                                            .unwrap_or_default();
+                                        let acts = p["activities"].as_array().map(|a| a.len()).unwrap_or(0);
+                                        println!("[{mode}]   presence keys: {pk:?}, activities: {acts}");
+                                        if let Some(a0) = p["activities"].get(0) {
+                                            let s = a0.to_string();
+                                            let cut: String = s.chars().take(600).collect();
+                                            println!("[{mode}]   activity[0]: {cut}");
+                                        }
+                                    }
                                 }
+                                // форма первых элементов: G(id,count) / M(user_id)
+                                let sample: Vec<String> = items
+                                    .iter()
+                                    .take(8)
+                                    .map(|it| {
+                                        if let Some(g) = it.get("group") {
+                                            format!("G({},{})", g["id"], g["count"])
+                                        } else if let Some(m) = it.get("member") {
+                                            format!("M({})", m["user"]["id"])
+                                        } else {
+                                            "?".into()
+                                        }
+                                    })
+                                    .collect();
+                                println!("[{mode}]   items[0..8]: {}", sample.join(" "));
                             }
                         }
                         let groups: Vec<String> = d["groups"]

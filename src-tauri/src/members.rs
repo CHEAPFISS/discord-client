@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{command, AppHandle, Manager};
 
-use discord_client::{DiscordState, FetchSlot, FetchState, GatewaySender, MemberInfo};
+use discord_client::{DiscordState, FetchSlot, FetchState, GatewaySender, MemberGroup, MemberInfo};
 
 /// Сколько максимум участников тянем (10 диапазонов по 100).
 const MAX_MEMBERS_FETCH: u64 = 1000;
@@ -52,7 +52,7 @@ pub async fn get_guild_members(
     app: AppHandle,
     guild_id: String,
     channel_id: String,
-) -> Result<Vec<MemberInfo>, String> {
+) -> Result<Vec<MemberGroup>, String> {
     let state = app.state::<DiscordState>();
 
     // 1) Кэш (не дёргаем gateway на каждый клик по серверу).
@@ -129,10 +129,10 @@ pub async fn get_guild_members(
     }
 
     // 5) Забираем результат и отписываемся от диапазонов.
-    let raw_members = {
+    let ranges = {
         state.member_fetch.fetches.lock().unwrap().remove(&guild_id);
         let st = slot.state.lock().unwrap();
-        st.members.clone()
+        st.ranges.clone()
     };
     let unsubscribe = json!({
         "op": 37,
@@ -140,24 +140,38 @@ pub async fn get_guild_members(
     });
     let _ = sender.send(unsubscribe).await;
 
-    // 6) Конвертация + дедуп по user_id.
+    // 6) Сборка групп в порядке отображения Discord:
+    //    идём по диапазонам и элементам подряд; `group`-маркер открывает
+    //    новую группу, `member`-элемент попадает в текущую.
     let mut seen_ids = HashSet::new();
-    let mut members: Vec<MemberInfo> = Vec::new();
-    for m in &raw_members {
-        let info = to_member(m);
-        if info.user_id.is_empty() || !seen_ids.insert(info.user_id.clone()) {
-            continue;
+    let mut groups: Vec<MemberGroup> = Vec::new();
+    for items in ranges.values() {
+        for it in items {
+            if let Some(g) = it.get("group") {
+                let id = g["id"].as_str().unwrap_or("").to_string();
+                if groups.last().map(|p| p.id == id).unwrap_or(false) {
+                    continue; // повторный маркер той же группы (граница диапазона)
+                }
+                groups.push(MemberGroup { id, members: Vec::new() });
+            } else if let Some(m) = it.get("member") {
+                let info = to_member(m);
+                if info.user_id.is_empty() || !seen_ids.insert(info.user_id.clone()) {
+                    continue;
+                }
+                if let Some(last) = groups.last_mut() {
+                    last.members.push(info);
+                }
+            }
         }
-        members.push(info);
     }
-
-    if members.is_empty() {
+    groups.retain(|g| !g.members.is_empty());
+    if groups.is_empty() {
         return Err("Discord не прислал список участников".into());
     }
 
     {
         let mut cache = state.member_fetch.cache.lock().unwrap();
-        cache.insert(guild_id.clone(), (Instant::now(), members.clone()));
+        cache.insert(guild_id.clone(), (Instant::now(), groups.clone()));
     }
-    Ok(members)
+    Ok(groups)
 }

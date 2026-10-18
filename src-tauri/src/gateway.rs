@@ -405,17 +405,16 @@ async fn gateway_once(
                                         if op["op"].as_str() != Some("SYNC") {
                                             continue;
                                         }
-                                        if let Some(start) =
+                                        let Some(start) =
                                             op["range"].get(0).and_then(|x| x.as_i64())
-                                        {
-                                            st.seen.insert(start);
-                                        }
+                                        else {
+                                            continue;
+                                        };
+                                        st.seen.insert(start);
                                         if let Some(items) = op["items"].as_array() {
-                                            for it in items {
-                                                if let Some(m) = it.get("member") {
-                                                    st.members.push(m.clone());
-                                                }
-                                            }
+                                            // элементы как есть (group-маркеры + members):
+                                            // порядок items = порядок отображения Discord.
+                                            st.ranges.insert(start, items.clone());
                                         }
                                     }
                                 }
@@ -423,12 +422,19 @@ async fn gateway_once(
                                 {
                                     let mut pres = state.presences.lock().unwrap();
                                     let entry = pres.entry(gid.to_string()).or_default();
-                                    for m in &st.members {
-                                        if let (Some(uid), Some(status)) = (
-                                            m["user"]["id"].as_str(),
-                                            m["presence"]["status"].as_str(),
-                                        ) {
-                                            entry.insert(uid.to_string(), status.to_string());
+                                    for items in st.ranges.values() {
+                                        for it in items {
+                                            if let Some(m) = it.get("member") {
+                                                if let (Some(uid), Some(status)) = (
+                                                    m["user"]["id"].as_str(),
+                                                    m["presence"]["status"].as_str(),
+                                                ) {
+                                                    entry.insert(
+                                                        uid.to_string(),
+                                                        status.to_string(),
+                                                    );
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -439,9 +445,19 @@ async fn gateway_once(
                                     st.done = true;
                                     slot.notify.notify_one();
                                 }
+                                let members_count: usize = st
+                                    .ranges
+                                    .values()
+                                    .map(|items| {
+                                        items
+                                            .iter()
+                                            .filter(|it| it.get("member").is_some())
+                                            .count()
+                                    })
+                                    .sum();
                                 log::debug!(
                                     "member list sync: gid={gid} членов={} seen={:?}",
-                                    st.members.len(),
+                                    members_count,
                                     st.seen
                                 );
                             }

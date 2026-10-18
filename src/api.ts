@@ -37,6 +37,12 @@ export interface Member {
   roles: string[];
 }
 
+/** Группа списка участников: id hoist-роли либо "online"/"offline" (как у Discord). */
+export interface MemberGroup {
+  id: string;
+  members: Member[];
+}
+
 /** Роль сервера. */
 export interface Role {
   id: string;
@@ -72,7 +78,7 @@ export const api = {
   getGuilds: () => invoke<Guild[]>('get_guilds'),
   getChannels: (guildId: string) => invoke<Channel[]>('get_channels', { guildId }),
   getGuildMembers: (guildId: string, channelId: string) =>
-    invoke<Member[]>('get_guild_members', { guildId, channelId }),
+    invoke<MemberGroup[]>('get_guild_members', { guildId, channelId }),
   getGuildRoles: (guildId: string) => invoke<Role[]>('get_guild_roles', { guildId }),
   getGuildActivity: (guildId: string) => invoke<GuildActivity>('get_guild_activity', { guildId }),
   getMessages: (channelId: string) => invoke<ChatMessage[]>('get_messages', { channelId }),
