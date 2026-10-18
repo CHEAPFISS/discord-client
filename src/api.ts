@@ -107,10 +107,17 @@ export interface PresenceInfo {
   activities: ActivityInfo[];
 }
 
+/** Голосовое состояние участника: канал + флаги демонстрации экрана/камеры. */
+export interface VoiceStateInfo {
+  channel_id: string;
+  self_stream: boolean;
+  self_video: boolean;
+}
+
 /** Presence-статусы и голосовые состояния участников. */
 export interface GuildActivity {
   presences: Record<string, PresenceInfo>;
-  voice: Record<string, string>;
+  voice: Record<string, VoiceStateInfo>;
 }
 
 /** Текущий пользователь. */

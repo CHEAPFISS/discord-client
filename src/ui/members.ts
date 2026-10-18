@@ -2,7 +2,7 @@
 // (hoist-роли + «В сети»/«Не в сети»), presence-статусы, бейдж «БОТ»,
 // «🔊 В голосовом чате» — только если никакого статуса нет.
 
-import { api, type Member } from '../api';
+import { api, type Member, type VoiceStateInfo } from '../api';
 import { el } from '../dom';
 import type { PresenceUpdatePayload, VoiceMemberUpdatePayload, VoiceSpeakingPayload } from '../events';
 import { state } from '../state';
@@ -67,6 +67,15 @@ function activityLines(userId: string): { text: string; title?: string }[] {
       title: extra ? `${act.name} — ${extra}` : undefined,
     },
   ];
+}
+
+/** Строка-индикатор демонстрации экрана/камеры (self_stream/self_video).
+ *  Возвращает null, если участник ничего не демонстрирует. */
+function streamStatusLine(vs: VoiceStateInfo | undefined): string | null {
+  if (!vs) return null;
+  if (vs.self_stream) return '🖥 Демонстрирует свой экран';
+  if (vs.self_video) return '📹 Демонстрирует камеру';
+  return null;
 }
 
 export function roleColor(color: number): string | null {
@@ -136,11 +145,16 @@ export function handlePresenceUpdate(p: PresenceUpdatePayload): void {
   if (!state.membersLoading) renderMembers();
 }
 
-/** VOICE_STATE_UPDATE: обновляем «кто в каком голосовом канале». */
+/** VOICE_STATE_UPDATE: обновляем «кто в каком голосовом канале» (+ флаги стрима). */
 export function handleVoiceMemberUpdate(p: VoiceMemberUpdatePayload): void {
   if (p.guild_id !== state.membersGuildId) return;
-  if (p.channel_id) state.memberVoice.set(p.user_id, p.channel_id);
-  else {
+  if (p.channel_id) {
+    state.memberVoice.set(p.user_id, {
+      channel_id: p.channel_id,
+      self_stream: p.self_stream,
+      self_video: p.self_video,
+    });
+  } else {
     state.memberVoice.delete(p.user_id);
     state.voiceSpeaking.delete(p.user_id); // вышел из голоса — обводка долой
   }
@@ -256,7 +270,16 @@ function memberRow(m: Member): HTMLElement {
   // Статус — одна строка: кастом-статус либо активность (как в Discord).
   // Голосовая строка — только фолбэк, если статуса нет вовсе (в официальном
   // клиенте у людей со статусом «в голосовом чате» не выводится).
+  // Демонстрация экрана/камеры — важнее прочих активностей: показываем первой.
+  const vs = state.memberVoice.get(m.user_id);
   const lines = activityLines(m.user_id);
+  const streamLine = streamStatusLine(vs);
+  if (streamLine) {
+    const sub = document.createElement('div');
+    sub.className = 'member-sub streaming';
+    sub.textContent = streamLine;
+    body.appendChild(sub);
+  }
   if (lines.length > 0) {
     for (const line of lines) {
       const sub = document.createElement('div');
@@ -265,7 +288,7 @@ function memberRow(m: Member): HTMLElement {
       if (line.title) sub.title = line.title;
       body.appendChild(sub);
     }
-  } else if (state.memberVoice.has(m.user_id)) {
+  } else if (!streamLine && vs) {
     const sub = document.createElement('div');
     sub.className = 'member-sub';
     sub.textContent = '🔊 В голосовом чате';
@@ -289,7 +312,7 @@ export function renderVoiceMembers(): void {
   for (const [channelId, container] of Object.entries(state.voiceMemberEls)) {
     container.innerHTML = '';
     const rows = [...state.memberVoice.entries()]
-      .filter(([, cid]) => cid === channelId)
+      .filter(([, vs]) => vs.channel_id === channelId)
       .map(([uid]) => state.members.find((m) => m.user_id === uid))
       .filter((m): m is Member => m !== undefined)
       .sort((a, b) => a.username.localeCompare(b.username, 'ru'));

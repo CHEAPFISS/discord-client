@@ -361,6 +361,9 @@ summary:focus-visible {
   text-overflow: ellipsis;
 }
 
+/* Демонстрация экрана/камеры — подсвечиваем бирюзовым (акцент). */
+.member-sub.streaming { color: var(--accent); }
+
 /* --- Input --- */
 .input-area { padding: 0 20px 20px; }
 .input-wrapper {

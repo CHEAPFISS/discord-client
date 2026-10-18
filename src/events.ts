@@ -42,11 +42,14 @@ export interface PresenceUpdatePayload {
   activities: ActivityInfo[];
 }
 
-/** VOICE_STATE_UPDATE: участник вошёл/вышел из голосового канала. */
+/** VOICE_STATE_UPDATE: участник вошёл/вышел из голосового канала
+ *  (+ флаги демонстрации экрана/камеры). */
 export interface VoiceMemberUpdatePayload {
   guild_id: string;
   user_id: string;
   channel_id: string | null;
+  self_stream: boolean;
+  self_video: boolean;
 }
 
 /** VOICE_SPEAKING: индикатор «говорит» (по аудио-кадрам; false — замолчал). */

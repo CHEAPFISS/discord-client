@@ -238,7 +238,7 @@ var state = {
   /** user_id, чей presence обновился живым PRESENCE_UPDATE при загрузке —
    *  снапшот из get_guild_activity их не должен затирать (свежее у живого). */
   presencesTouched: /* @__PURE__ */ new Set(),
-  /** user_id → channel_id (кто в каком голосовом канале). */
+  /** user_id → голосовое состояние (канал + флаги демонстрации экрана/камеры). */
   memberVoice: /* @__PURE__ */ new Map(),
   /** channelId → контейнер под голосовым каналом (мини-список участников). */
   voiceMemberEls: {},
@@ -652,6 +652,12 @@ function activityLines(userId) {
     }
   ];
 }
+function streamStatusLine(vs) {
+  if (!vs) return null;
+  if (vs.self_stream) return "\u{1F5A5} \u0414\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0438\u0440\u0443\u0435\u0442 \u0441\u0432\u043E\u0439 \u044D\u043A\u0440\u0430\u043D";
+  if (vs.self_video) return "\u{1F4F9} \u0414\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0438\u0440\u0443\u0435\u0442 \u043A\u0430\u043C\u0435\u0440\u0443";
+  return null;
+}
 function roleColor(color) {
   return color ? "#" + color.toString(16).padStart(6, "0") : null;
 }
@@ -709,8 +715,13 @@ function handlePresenceUpdate(p) {
 }
 function handleVoiceMemberUpdate(p) {
   if (p.guild_id !== state.membersGuildId) return;
-  if (p.channel_id) state.memberVoice.set(p.user_id, p.channel_id);
-  else {
+  if (p.channel_id) {
+    state.memberVoice.set(p.user_id, {
+      channel_id: p.channel_id,
+      self_stream: p.self_stream,
+      self_video: p.self_video
+    });
+  } else {
     state.memberVoice.delete(p.user_id);
     state.voiceSpeaking.delete(p.user_id);
   }
@@ -801,7 +812,15 @@ function memberRow(m) {
     name.appendChild(bot);
   }
   body.appendChild(name);
+  const vs = state.memberVoice.get(m.user_id);
   const lines = activityLines(m.user_id);
+  const streamLine = streamStatusLine(vs);
+  if (streamLine) {
+    const sub = document.createElement("div");
+    sub.className = "member-sub streaming";
+    sub.textContent = streamLine;
+    body.appendChild(sub);
+  }
   if (lines.length > 0) {
     for (const line of lines) {
       const sub = document.createElement("div");
@@ -810,7 +829,7 @@ function memberRow(m) {
       if (line.title) sub.title = line.title;
       body.appendChild(sub);
     }
-  } else if (state.memberVoice.has(m.user_id)) {
+  } else if (!streamLine && vs) {
     const sub = document.createElement("div");
     sub.className = "member-sub";
     sub.textContent = "\u{1F50A} \u0412 \u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u043C \u0447\u0430\u0442\u0435";
@@ -829,7 +848,7 @@ function letterSpan(name, cls = "member-letter") {
 function renderVoiceMembers() {
   for (const [channelId, container] of Object.entries(state.voiceMemberEls)) {
     container.innerHTML = "";
-    const rows = [...state.memberVoice.entries()].filter(([, cid]) => cid === channelId).map(([uid]) => state.members.find((m) => m.user_id === uid)).filter((m) => m !== void 0).sort((a, b) => a.username.localeCompare(b.username, "ru"));
+    const rows = [...state.memberVoice.entries()].filter(([, vs]) => vs.channel_id === channelId).map(([uid]) => state.members.find((m) => m.user_id === uid)).filter((m) => m !== void 0).sort((a, b) => a.username.localeCompare(b.username, "ru"));
     for (const m of rows) container.appendChild(voiceMemberRow(m));
   }
 }

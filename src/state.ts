@@ -1,6 +1,6 @@
 // Клиентский стейт (единственный мутабельный объект на всё приложение).
 
-import type { Channel, Member, MemberGroup, PresenceInfo, Role } from './api';
+import type { Channel, Member, MemberGroup, PresenceInfo, Role, VoiceStateInfo } from './api';
 
 export const state = {
   /** Открытый сервер (нужен для join_voice_channel). */
@@ -33,8 +33,8 @@ export const state = {
   /** user_id, чей presence обновился живым PRESENCE_UPDATE при загрузке —
    *  снапшот из get_guild_activity их не должен затирать (свежее у живого). */
   presencesTouched: new Set<string>(),
-  /** user_id → channel_id (кто в каком голосовом канале). */
-  memberVoice: new Map<string, string>(),
+  /** user_id → голосовое состояние (канал + флаги демонстрации экрана/камеры). */
+  memberVoice: new Map<string, VoiceStateInfo>(),
   /** channelId → контейнер под голосовым каналом (мини-список участников). */
   voiceMemberEls: {} as Record<string, HTMLElement>,
   /** Сервер, для которого сейчас загружены участники. */

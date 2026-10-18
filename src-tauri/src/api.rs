@@ -155,8 +155,8 @@ pub struct Role {
 pub struct GuildActivity {
     /// user_id → PresenceInfo (статус + активности)
     pub presences: std::collections::HashMap<String, discord_client::PresenceInfo>,
-    /// user_id → channel_id (кто в каком голосовом канале)
-    pub voice: std::collections::HashMap<String, String>,
+    /// user_id → голосовое состояние (канал + флаги демонстрации экрана/камеры)
+    pub voice: std::collections::HashMap<String, discord_client::VoiceStateInfo>,
 }
 
 /// Общий HTTP-клиент: пул соединений (раньше новый Client на каждый запрос —

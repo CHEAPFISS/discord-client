@@ -3,7 +3,7 @@ use futures_util::{SinkExt, StreamExt};
 use tauri::{command, AppHandle, Emitter, Manager, State};
 use tokio_tungstenite::tungstenite::Message;
 
-use discord_client::{parse_presence, DiscordState, GatewaySender};
+use discord_client::{parse_presence, parse_voice_state, DiscordState, GatewaySender};
 use crate::api::parse_message;
 use crate::voice::connect::connect_voice;
 
@@ -386,10 +386,10 @@ async fn gateway_once(
                                 let vs_entry = vs_map.entry(gid.to_string()).or_default();
                                 if let Some(arr) = g["voice_states"].as_array() {
                                     for s in arr {
-                                        if let (Some(uid), Some(cid)) =
-                                            (s["user_id"].as_str(), s["channel_id"].as_str())
-                                        {
-                                            vs_entry.insert(uid.to_string(), cid.to_string());
+                                        if let Some(uid) = s["user_id"].as_str() {
+                                            if let Some(info) = parse_voice_state(s) {
+                                                vs_entry.insert(uid.to_string(), info);
+                                            }
                                         }
                                     }
                                 }
@@ -434,10 +434,10 @@ async fn gateway_once(
                             let vs_entry = vs.entry(gid.to_string()).or_default();
                             if let Some(arr) = d["voice_states"].as_array() {
                                 for s in arr {
-                                    if let (Some(uid), Some(cid)) =
-                                        (s["user_id"].as_str(), s["channel_id"].as_str())
-                                    {
-                                        vs_entry.insert(uid.to_string(), cid.to_string());
+                                    if let Some(uid) = s["user_id"].as_str() {
+                                        if let Some(info) = parse_voice_state(s) {
+                                            vs_entry.insert(uid.to_string(), info);
+                                        }
                                     }
                                 }
                             }
@@ -582,13 +582,18 @@ async fn handle_voice_state(app: &AppHandle, d: &serde_json::Value) {
     let gid = d["guild_id"].as_str().unwrap_or("");
     let uid = d["user_id"].as_str().unwrap_or("");
     if !gid.is_empty() && !uid.is_empty() {
-        let channel_id = d["channel_id"].as_str().map(String::from);
+        let info = parse_voice_state(d);
+        let (self_stream, self_video) = match &info {
+            Some(i) => (i.self_stream, i.self_video),
+            None => (false, false),
+        };
+        let channel_id = info.as_ref().map(|i| i.channel_id.clone());
         {
             let mut map = state.voice_states.lock().unwrap();
             let entry = map.entry(gid.to_string()).or_default();
-            match &channel_id {
-                Some(cid) => {
-                    entry.insert(uid.to_string(), cid.clone());
+            match info {
+                Some(info) => {
+                    entry.insert(uid.to_string(), info);
                 }
                 None => {
                     entry.remove(uid);
@@ -597,7 +602,13 @@ async fn handle_voice_state(app: &AppHandle, d: &serde_json::Value) {
         }
         let _ = app.emit(
             "voice_member_update",
-            json!({"guild_id": gid, "user_id": uid, "channel_id": channel_id}),
+            json!({
+                "guild_id": gid,
+                "user_id": uid,
+                "channel_id": channel_id,
+                "self_stream": self_stream,
+                "self_video": self_video,
+            }),
         );
     }
 }

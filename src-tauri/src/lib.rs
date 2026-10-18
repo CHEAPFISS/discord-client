@@ -110,6 +110,30 @@ pub struct PresenceInfo {
     pub activities: Vec<ActivityInfo>,
 }
 
+/// Голосовое состояние участника: канал + флаги демонстрации экрана/камеры.
+/// `self_stream`/`self_video` приходят в VOICE_STATE_UPDATE (и в снапшотах
+/// READY/GUILD_CREATE) — по ним рисуем индикатор «Демонстрирует свой экран».
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+pub struct VoiceStateInfo {
+    pub channel_id: String,
+    pub self_stream: bool,
+    pub self_video: bool,
+}
+
+/// Разбор голосового состояния Discord (VOICE_STATE_UPDATE, READY/GUILD_CREATE)
+/// в VoiceStateInfo. Требует непустой channel_id (иначе участник вне голоса).
+pub fn parse_voice_state(s: &serde_json::Value) -> Option<VoiceStateInfo> {
+    let channel_id = s["channel_id"].as_str()?.to_string();
+    if channel_id.is_empty() {
+        return None;
+    }
+    Some(VoiceStateInfo {
+        channel_id,
+        self_stream: s["self_stream"].as_bool().unwrap_or(false),
+        self_video: s["self_video"].as_bool().unwrap_or(false),
+    })
+}
+
 /// Разбор presence-объекта Discord (PRESENCE_UPDATE, READY/GUILD_CREATE,
 /// member-элементы списка участников) в PresenceInfo.
 pub fn parse_presence(p: &serde_json::Value) -> PresenceInfo {
@@ -201,8 +225,9 @@ pub struct DiscordState {
     pub voice_speaking: Arc<SpeakingTracker>,
     /// Presence участников (статус + активности): guild_id → user_id → PresenceInfo.
     pub presences: Arc<Mutex<HashMap<String, HashMap<String, PresenceInfo>>>>,
-    /// Кто в каком голосовом канале: guild_id → user_id → channel_id.
-    pub voice_states: Arc<Mutex<HashMap<String, HashMap<String, String>>>>,
+    /// Кто в каком голосовом канале: guild_id → user_id → голосовое состояние
+    /// (канал + флаги демонстрации экрана/камеры).
+    pub voice_states: Arc<Mutex<HashMap<String, HashMap<String, VoiceStateInfo>>>>,
     /// Число участников сервера (из READY) — для расчёта диапазонов списка.
     pub guild_member_counts: Arc<Mutex<HashMap<String, u64>>>,
     /// Последний статус gateway (status, error) — чтобы после полной перезагрузки
