@@ -11,7 +11,6 @@ use oto::{FrameSource, FrameStatus};
 /// poll_frame не спит и не блокирует: недостатке данных — Pending (oto подождёт
 /// своего следующего тика, пауза заполняется тишиной).
 pub(crate) struct MicSource {
-    _stream: cpal::Stream,
     /// Готовые закодированные кадры, выкладываемые рабочим потоком (FIFO).
     encoded: Arc<Mutex<VecDeque<Vec<u8>>>>,
     /// Waker пасера oto: poll регистрирует себя, когда очередь пуста; рабочий
@@ -198,33 +197,68 @@ impl MicSource {
                 .map_err(|e| format!("поток кодирования микрофона: {e}"))?;
         }
 
-        let stream = device
-            .build_input_stream(
-                &config,
-                {
-                    let ring_cb = ring.clone();
-                    let ring_cv_cb = ring_cv.clone();
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        let mut ring = ring_cb.lock().unwrap();
-                        for &s in data {
-                            ring.push_back(s);
-                            while ring.len() > MIC_RING_MAX {
-                                ring.pop_front();
+        // cpal::Stream не Send: его нельзя ни перенести в другой поток, ни
+        // безопасно держать в MicSource (unsafe impl Send был убран — это UB
+        // на части платформ). Поток записи создаётся и умирает в своём
+        // собственном потоке; ошибки возвращаем каналом.
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        {
+            let ring = ring.clone();
+            let ring_cv = ring_cv.clone();
+            let stop_flag = stop_flag.clone();
+            std::thread::Builder::new()
+                .name("mic-stream".into())
+                .spawn(move || {
+                    let result = device
+                        .build_input_stream(
+                            &config,
+                            {
+                                let ring_cb = ring.clone();
+                                let ring_cv_cb = ring_cv.clone();
+                                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                                    let mut ring = ring_cb.lock().unwrap();
+                                    for &s in data {
+                                        ring.push_back(s);
+                                        while ring.len() > MIC_RING_MAX {
+                                            ring.pop_front();
+                                        }
+                                    }
+                                    // Будим рабочий поток — он сам решит, накопился ли кадр,
+                                    // и затем разбудит пасер oto (контракт FrameSource).
+                                    ring_cv_cb.notify_all();
+                                }
+                            },
+                            move |err| log::warn!("cpal input stream error: {err}"),
+                            None,
+                        )
+                        .map_err(|e| format!("cpal open input stream: {e}"))
+                        .and_then(|s| {
+                            s.play().map_err(|e| format!("cpal input play: {e}"))?;
+                            Ok(s)
+                        });
+                    match result {
+                        Ok(stream) => {
+                            let _ = ready_tx.send(Ok(()));
+                            // Держим поток живым до stop_flag (MicSource::drop + notify).
+                            let mut guard = ring.lock().unwrap();
+                            while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                                guard = ring_cv.wait(guard).unwrap();
                             }
+                            drop(guard);
+                            drop(stream); // drop здесь же, на потоке создания
                         }
-                        // Будим рабочий поток — он сам решит, накопился ли кадр,
-                        // и затем разбудит пасер oto (контракт FrameSource).
-                        ring_cv_cb.notify_all();
+                        Err(e) => {
+                            let _ = ready_tx.send(Err(e));
+                        }
                     }
-                },
-                move |err| log::warn!("cpal input stream error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("cpal open input stream: {e}"))?;
-        stream.play().map_err(|e| format!("cpal input play: {e}"))?;
+                })
+                .map_err(|e| format!("поток микрофонного потока: {e}"))?;
+        }
+        ready_rx
+            .recv()
+            .map_err(|_| "поток микрофонного потока завершился рано")??;
 
         Ok(Self {
-            _stream: stream,
             encoded,
             waker,
             ring_cv,
@@ -260,8 +294,3 @@ impl FrameSource for MicSource {
         Poll::Pending
     }
 }
-
-/// Микрофон: cpal::Stream не Send, остальные поля — Arc с полной внутренней
-/// синхронизацией (Mutex/AtomicBool/Condvar). Кадры кодирует один отдельный
-/// поток; poll трогает только очередь и waker — Send безопасен вручную.
-unsafe impl Send for MicSource {}
