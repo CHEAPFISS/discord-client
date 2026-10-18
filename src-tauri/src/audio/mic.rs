@@ -29,9 +29,11 @@ pub(crate) const MIC_FRAME_SAMPLES: usize = 960; // 20 мс моно при 48 �
                                                  // потолка задержка растёт бесконечно (и целиком остаётся после unmute).
 pub(crate) const MIC_RING_MAX: usize = MIC_FRAME_SAMPLES * 4;
 
-/// RMS-порог «говорю сам»: своя речь не приходит по сети, обводку зажигаем по
-/// громкости кадра после шумодава (речь ≫ 0.1, остатки шума ≈ 0.001).
-const SELF_VAD_RMS: f32 = 0.04;
+/// VAD обводки «говорю сам»: RMS кадра захвата (после RNNoise, EMA-сглаживание).
+/// Гистерезис: речь включается громче attack, гаснет тише release — индикатор
+/// не мигает на границе порога. Речь ≫ 0.05 в масштабе ±1, остатки шума ≈ 0.001.
+const SELF_VAD_ATTACK: f32 = 0.02;
+const SELF_VAD_RELEASE: f32 = 0.008;
 
 impl MicSource {
     pub(crate) fn new(on_loud: std::sync::Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
@@ -92,6 +94,8 @@ impl MicSource {
                     let mut stereo = Vec::with_capacity(MIC_FRAME_SAMPLES * 2);
                     let mut mono = Vec::with_capacity(MIC_FRAME_SAMPLES);
                     let mut encoded_i: u64 = 0;
+                    let mut rms_ema: f32 = 0.0;
+                    let mut vad_open = false;
 
                     'worker: loop {
                         // 1) Собрать 20-мс кадр. Кольцо наполняет cpal-колбэк.
@@ -137,11 +141,20 @@ impl MicSource {
                             denoise_warmed = true;
                         }
 
-                        // 2.5) Обводка «говорю сам»: RMS кадра (после шумодава)
-                        // выше порога — зажигаем наружу; watcher сам погасит.
+                        // 2.5) Обводка «говорю сам»: EMA RMS после шумодава +
+                        // гистерезис attack/release — ровный индикатор без мигания.
                         if !mono.is_empty() {
                             let sum: f32 = mono.iter().map(|s| s * s).sum();
-                            if (sum / mono.len() as f32).sqrt() > SELF_VAD_RMS {
+                            let rms = (sum / mono.len() as f32).sqrt();
+                            rms_ema = rms_ema * 0.7 + rms * 0.3;
+                            if vad_open {
+                                if rms_ema < SELF_VAD_RELEASE {
+                                    vad_open = false;
+                                }
+                            } else if rms_ema > SELF_VAD_ATTACK {
+                                vad_open = true;
+                            }
+                            if vad_open {
                                 on_loud();
                             }
                         }

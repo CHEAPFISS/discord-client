@@ -245,6 +245,280 @@ var state = {
   membersLoading: false
 };
 
+// src/ui/toast.ts
+function showError(msg) {
+  const text = String(msg);
+  const toast = document.getElementById("errorToast");
+  if (!toast) {
+    alert(text);
+    return;
+  }
+  toast.textContent = text;
+  toast.style.display = "block";
+  setTimeout(() => {
+    toast.style.display = "none";
+  }, 8e3);
+  toast.onclick = () => {
+    toast.style.display = "none";
+  };
+}
+
+// src/ui/unread.ts
+function updateBadge(channelId) {
+  const channelEl = state.channelEls[channelId];
+  if (!channelEl) return;
+  const badge = channelEl.querySelector(".unread-badge");
+  if (!badge) return;
+  const n = state.unread.get(channelId) || 0;
+  if (n > 0) {
+    badge.textContent = n > 9 ? "9+" : String(n);
+    badge.classList.add("visible");
+  } else {
+    badge.classList.remove("visible");
+  }
+}
+
+// src/ui/chat.ts
+function fmtTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+function mentionHtml(id) {
+  const m = state.members.find((x) => x.user_id === id);
+  if (!m) {
+    return `<span class="mention">@${escapeHtml(id)}</span>`;
+  }
+  return `<span class="mention">@${escapeHtml(m.username)}</span>`;
+}
+function renderContent(rawHtml) {
+  return rawHtml.replace(/&lt;@(!?)(\d+)&gt;/g, (_, _bang, id) => mentionHtml(id)).replace(/\|\|(.+?)\|\|/gs, '<span class="spoiler">$1</span>');
+}
+function linkify(escaped) {
+  return escaped.replace(
+    /(https?:\/\/[^\s<]+)/g,
+    (u) => `<a class="embed-link" href="${u.replace(/"/g, "%22")}">${u}</a>`
+  );
+}
+var IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif)(\?.*)?$/i;
+var VIDEO_EXT = /\.(mp4|webm|mov)(\?.*)?$/i;
+function isImage(a) {
+  return (a.content_type ?? "").startsWith("image/") || IMAGE_EXT.test(a.url);
+}
+function isVideo(a) {
+  return (a.content_type ?? "").startsWith("video/") || VIDEO_EXT.test(a.url);
+}
+function embedNode(e) {
+  const box = document.createElement("div");
+  box.className = "msg-embed";
+  if (e.color != null) {
+    box.style.borderLeftColor = "#" + e.color.toString(16).padStart(6, "0");
+  }
+  const parts = [];
+  if (e.author) parts.push(`<div class="embed-author">${escapeHtml(e.author)}</div>`);
+  if (e.title) {
+    const t = escapeHtml(e.title);
+    parts.push(
+      e.url ? `<a class="embed-title" href="${e.url.replace(/"/g, "%22")}">${t}</a>` : `<div class="embed-title">${t}</div>`
+    );
+  }
+  if (e.description) {
+    parts.push(`<div class="embed-desc">${linkify(escapeHtml(e.description))}</div>`);
+  }
+  if (e.fields.length > 0) {
+    const fields = e.fields.map(
+      (f) => `<div class="embed-field${f.inline ? " inline" : ""}"><div class="ef-name">${escapeHtml(f.name)}</div><div class="ef-value">${linkify(escapeHtml(f.value))}</div></div>`
+    ).join("");
+    parts.push(`<div class="embed-fields">${fields}</div>`);
+  }
+  if (e.footer) parts.push(`<div class="embed-footer">${escapeHtml(e.footer)}</div>`);
+  box.innerHTML = parts.join("");
+  if (e.video) {
+    const video = document.createElement("video");
+    video.className = "embed-video";
+    video.src = e.video;
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    video.onended = () => {
+      video.currentTime = 0;
+      void video.play().catch(() => {
+      });
+    };
+    video.onerror = () => video.remove();
+    box.appendChild(video);
+  } else if (e.image) {
+    const img = document.createElement("img");
+    img.className = "embed-image";
+    img.src = e.image;
+    img.loading = "lazy";
+    box.appendChild(img);
+  }
+  if (e.thumbnail && !e.image && !e.video) {
+    box.classList.add("with-thumb");
+    const th = document.createElement("img");
+    th.className = "embed-thumb";
+    th.src = e.thumbnail;
+    th.loading = "lazy";
+    box.appendChild(th);
+  }
+  return box;
+}
+function appendAttachments(bubble, msg) {
+  const media = document.createElement("div");
+  media.className = "att-media";
+  for (const a of msg.attachments) {
+    if (isImage(a)) {
+      const img = document.createElement("img");
+      img.className = "att-image";
+      img.src = a.url;
+      img.alt = a.filename;
+      img.loading = "lazy";
+      img.title = "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435";
+      media.appendChild(img);
+    } else if (isVideo(a)) {
+      const video = document.createElement("video");
+      video.className = "att-video";
+      video.src = a.url;
+      video.controls = true;
+      video.preload = "metadata";
+      media.appendChild(video);
+    } else {
+      const link = document.createElement("a");
+      link.className = "att-file";
+      link.href = a.url;
+      link.textContent = `\u{1F4CE} ${a.filename}`;
+      bubble.appendChild(link);
+    }
+  }
+  if (media.childElementCount > 0) bubble.appendChild(media);
+}
+function avatarNode(msg) {
+  const av = document.createElement("div");
+  av.className = "avatar";
+  const letter = (msg.author || "?").charAt(0).toUpperCase();
+  if (msg.author_id && msg.author_avatar) {
+    const ext = msg.author_avatar.startsWith("a_") ? "gif" : "png";
+    const img = document.createElement("img");
+    img.src = `https://cdn.discordapp.com/avatars/${msg.author_id}/${msg.author_avatar}.${ext}?size=64`;
+    img.alt = "";
+    img.onerror = () => {
+      img.remove();
+      av.textContent = letter;
+    };
+    av.appendChild(img);
+  } else {
+    av.textContent = letter;
+  }
+  return av;
+}
+function renderMessage(msg, opts = {}) {
+  const messagesEl = el("messages");
+  const existingEmpty = messagesEl.querySelector(".messages-empty");
+  if (existingEmpty) existingEmpty.remove();
+  const div = document.createElement("div");
+  div.className = "message";
+  div.appendChild(avatarNode(msg));
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.innerHTML = `
+      <div class="header">
+        <span class="author">${escapeHtml(msg.author)}</span>
+        <span class="time">${fmtTime(msg.timestamp)}</span>
+      </div>
+      ${msg.content ? `<div class="text">${renderContent(escapeHtml(msg.content))}</div>` : ""}
+  `;
+  appendAttachments(bubble, msg);
+  for (const e of msg.embeds) bubble.appendChild(embedNode(e));
+  div.appendChild(bubble);
+  messagesEl.appendChild(div);
+  if (!opts.live) return;
+  const atBottom = messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - 40;
+  if (atBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+function clearMessages() {
+  const messagesEl = el("messages");
+  messagesEl.innerHTML = "";
+  const empty = document.createElement("div");
+  empty.className = "messages-empty";
+  empty.textContent = "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u043F\u043E\u043A\u0430 \u043D\u0435\u0442";
+  messagesEl.appendChild(empty);
+}
+async function openTextChannel(channel) {
+  const messagesEl = el("messages");
+  el("chatHeader").textContent = "# " + channel.name;
+  state.currentChannelId = channel.id;
+  messagesEl.innerHTML = "";
+  clearMessages();
+  try {
+    const history = await api.getMessages(channel.id);
+    if (history.length === 0) clearMessages();
+    else history.forEach((msg) => renderMessage(msg));
+  } catch (e) {
+    messagesEl.innerHTML = "";
+    const div = document.createElement("div");
+    div.className = "messages-empty";
+    div.textContent = "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0438\u0441\u0442\u043E\u0440\u0438\u044E: " + e;
+    messagesEl.appendChild(div);
+  }
+}
+function appendLiveMessage(msg) {
+  if (!state.currentChannelId || msg.channel_id !== state.currentChannelId) {
+    state.unread.set(msg.channel_id, (state.unread.get(msg.channel_id) || 0) + 1);
+    updateBadge(msg.channel_id);
+    return;
+  }
+  renderMessage(msg, { live: true });
+}
+function initChatInput() {
+  const messageInput = el("messageInput");
+  const messagesEl = el("messages");
+  messagesEl.addEventListener("click", (e) => {
+    const target = e.target;
+    if (target.classList.contains("spoiler")) {
+      target.classList.replace("spoiler", "revealed");
+      return;
+    }
+    if (target instanceof HTMLImageElement && (target.classList.contains("att-image") || target.classList.contains("embed-image"))) {
+      void api.openUrl(target.src).catch(() => {
+      });
+      return;
+    }
+    const link = target.closest("a[href]");
+    if (link) {
+      e.preventDefault();
+      void api.openUrl(link.href).catch(() => {
+      });
+    }
+  });
+  messageInput.addEventListener("input", () => {
+    messageInput.style.height = "auto";
+    messageInput.style.height = messageInput.scrollHeight + "px";
+  });
+  messageInput.addEventListener("keypress", async (e) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    e.preventDefault();
+    const text = messageInput.value.trim();
+    const channelId = state.currentChannelId;
+    if (!text || !channelId) return;
+    messageInput.value = "";
+    messageInput.style.height = "auto";
+    try {
+      const msg = await api.sendMessage(channelId, text);
+      renderMessage(msg, { live: true });
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    } catch (err) {
+      showError("\u041D\u0435 \u043E\u0442\u043F\u0440\u0430\u0432\u0438\u043B\u043E\u0441\u044C: " + err);
+    }
+  });
+}
+
 // src/ui/members.ts
 function avatarUrl(m) {
   if (!m.avatar) return null;
@@ -496,281 +770,6 @@ function voiceMemberRow(m) {
   row.appendChild(av);
   row.appendChild(name);
   return row;
-}
-
-// src/ui/toast.ts
-function showError(msg) {
-  const text = String(msg);
-  const toast = document.getElementById("errorToast");
-  if (!toast) {
-    alert(text);
-    return;
-  }
-  toast.textContent = text;
-  toast.style.display = "block";
-  setTimeout(() => {
-    toast.style.display = "none";
-  }, 8e3);
-  toast.onclick = () => {
-    toast.style.display = "none";
-  };
-}
-
-// src/ui/unread.ts
-function updateBadge(channelId) {
-  const channelEl = state.channelEls[channelId];
-  if (!channelEl) return;
-  const badge = channelEl.querySelector(".unread-badge");
-  if (!badge) return;
-  const n = state.unread.get(channelId) || 0;
-  if (n > 0) {
-    badge.textContent = n > 9 ? "9+" : String(n);
-    badge.classList.add("visible");
-  } else {
-    badge.classList.remove("visible");
-  }
-}
-
-// src/ui/chat.ts
-function fmtTime(ts) {
-  if (!ts) return "";
-  const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
-function mentionHtml(id) {
-  const m = state.members.find((x) => x.user_id === id);
-  if (!m) {
-    return `<span class="mention">@${escapeHtml(id)}</span>`;
-  }
-  let color = null;
-  for (let i = m.roles.length - 1; i >= 0 && !color; i--) {
-    const r = state.roles.find((x) => x.id === m.roles[i]);
-    if (r) color = roleColor(r.color);
-  }
-  const style = color ? ` style="color:${color}"` : "";
-  return `<span class="mention"${style}>@${escapeHtml(m.username)}</span>`;
-}
-function renderContent(rawHtml) {
-  return rawHtml.replace(/&lt;@(!?)(\d+)&gt;/g, (_, _bang, id) => mentionHtml(id)).replace(/\|\|(.+?)\|\|/gs, '<span class="spoiler">$1</span>');
-}
-function linkify(escaped) {
-  return escaped.replace(
-    /(https?:\/\/[^\s<]+)/g,
-    (u) => `<a class="embed-link" href="${u.replace(/"/g, "%22")}">${u}</a>`
-  );
-}
-var IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif)(\?.*)?$/i;
-var VIDEO_EXT = /\.(mp4|webm|mov)(\?.*)?$/i;
-function isImage(a) {
-  return (a.content_type ?? "").startsWith("image/") || IMAGE_EXT.test(a.url);
-}
-function isVideo(a) {
-  return (a.content_type ?? "").startsWith("video/") || VIDEO_EXT.test(a.url);
-}
-function embedNode(e) {
-  const box = document.createElement("div");
-  box.className = "msg-embed";
-  if (e.color != null) {
-    box.style.borderLeftColor = "#" + e.color.toString(16).padStart(6, "0");
-  }
-  const parts = [];
-  if (e.author) parts.push(`<div class="embed-author">${escapeHtml(e.author)}</div>`);
-  if (e.title) {
-    const t = escapeHtml(e.title);
-    parts.push(
-      e.url ? `<a class="embed-title" href="${e.url.replace(/"/g, "%22")}">${t}</a>` : `<div class="embed-title">${t}</div>`
-    );
-  }
-  if (e.description) {
-    parts.push(`<div class="embed-desc">${linkify(escapeHtml(e.description))}</div>`);
-  }
-  if (e.fields.length > 0) {
-    const fields = e.fields.map(
-      (f) => `<div class="embed-field${f.inline ? " inline" : ""}"><div class="ef-name">${escapeHtml(f.name)}</div><div class="ef-value">${linkify(escapeHtml(f.value))}</div></div>`
-    ).join("");
-    parts.push(`<div class="embed-fields">${fields}</div>`);
-  }
-  if (e.footer) parts.push(`<div class="embed-footer">${escapeHtml(e.footer)}</div>`);
-  box.innerHTML = parts.join("");
-  if (e.video) {
-    const video = document.createElement("video");
-    video.className = "embed-video";
-    video.src = e.video;
-    video.autoplay = true;
-    video.muted = true;
-    video.loop = true;
-    video.playsInline = true;
-    video.onerror = () => video.remove();
-    box.appendChild(video);
-  } else if (e.image) {
-    const img = document.createElement("img");
-    img.className = "embed-image";
-    img.src = e.image;
-    img.loading = "lazy";
-    box.appendChild(img);
-  }
-  if (e.thumbnail && !e.image && !e.video) {
-    box.classList.add("with-thumb");
-    const th = document.createElement("img");
-    th.className = "embed-thumb";
-    th.src = e.thumbnail;
-    th.loading = "lazy";
-    box.appendChild(th);
-  }
-  return box;
-}
-function appendAttachments(bubble, msg) {
-  const media = document.createElement("div");
-  media.className = "att-media";
-  for (const a of msg.attachments) {
-    if (isImage(a)) {
-      const img = document.createElement("img");
-      img.className = "att-image";
-      img.src = a.url;
-      img.alt = a.filename;
-      img.loading = "lazy";
-      img.title = "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435";
-      media.appendChild(img);
-    } else if (isVideo(a)) {
-      const video = document.createElement("video");
-      video.className = "att-video";
-      video.src = a.url;
-      video.controls = true;
-      video.preload = "metadata";
-      media.appendChild(video);
-    } else {
-      const link = document.createElement("a");
-      link.className = "att-file";
-      link.href = a.url;
-      link.textContent = `\u{1F4CE} ${a.filename}`;
-      bubble.appendChild(link);
-    }
-  }
-  if (media.childElementCount > 0) bubble.appendChild(media);
-}
-function avatarNode(msg) {
-  const av = document.createElement("div");
-  av.className = "avatar";
-  const letter = (msg.author || "?").charAt(0).toUpperCase();
-  if (msg.author_id && msg.author_avatar) {
-    const ext = msg.author_avatar.startsWith("a_") ? "gif" : "png";
-    const img = document.createElement("img");
-    img.src = `https://cdn.discordapp.com/avatars/${msg.author_id}/${msg.author_avatar}.${ext}?size=64`;
-    img.alt = "";
-    img.onerror = () => {
-      img.remove();
-      av.textContent = letter;
-    };
-    av.appendChild(img);
-  } else {
-    av.textContent = letter;
-  }
-  return av;
-}
-function renderMessage(msg, opts = {}) {
-  const messagesEl = el("messages");
-  const existingEmpty = messagesEl.querySelector(".messages-empty");
-  if (existingEmpty) existingEmpty.remove();
-  const div = document.createElement("div");
-  div.className = "message";
-  div.appendChild(avatarNode(msg));
-  const bubble = document.createElement("div");
-  bubble.className = "bubble";
-  bubble.innerHTML = `
-      <div class="header">
-        <span class="author">${escapeHtml(msg.author)}</span>
-        <span class="time">${fmtTime(msg.timestamp)}</span>
-      </div>
-      ${msg.content ? `<div class="text">${renderContent(escapeHtml(msg.content))}</div>` : ""}
-  `;
-  appendAttachments(bubble, msg);
-  for (const e of msg.embeds) bubble.appendChild(embedNode(e));
-  div.appendChild(bubble);
-  messagesEl.appendChild(div);
-  if (!opts.live) return;
-  const atBottom = messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - 40;
-  if (atBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
-}
-function clearMessages() {
-  const messagesEl = el("messages");
-  messagesEl.innerHTML = "";
-  const empty = document.createElement("div");
-  empty.className = "messages-empty";
-  empty.textContent = "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u043F\u043E\u043A\u0430 \u043D\u0435\u0442";
-  messagesEl.appendChild(empty);
-}
-async function openTextChannel(channel) {
-  const messagesEl = el("messages");
-  el("chatHeader").textContent = "# " + channel.name;
-  state.currentChannelId = channel.id;
-  messagesEl.innerHTML = "";
-  clearMessages();
-  try {
-    const history = await api.getMessages(channel.id);
-    if (history.length === 0) clearMessages();
-    else history.forEach((msg) => renderMessage(msg));
-  } catch (e) {
-    messagesEl.innerHTML = "";
-    const div = document.createElement("div");
-    div.className = "messages-empty";
-    div.textContent = "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0438\u0441\u0442\u043E\u0440\u0438\u044E: " + e;
-    messagesEl.appendChild(div);
-  }
-}
-function appendLiveMessage(msg) {
-  if (!state.currentChannelId || msg.channel_id !== state.currentChannelId) {
-    state.unread.set(msg.channel_id, (state.unread.get(msg.channel_id) || 0) + 1);
-    updateBadge(msg.channel_id);
-    return;
-  }
-  renderMessage(msg, { live: true });
-}
-function initChatInput() {
-  const messageInput = el("messageInput");
-  const messagesEl = el("messages");
-  messagesEl.addEventListener("click", (e) => {
-    const target = e.target;
-    if (target.classList.contains("spoiler")) {
-      target.classList.replace("spoiler", "revealed");
-      return;
-    }
-    if (target instanceof HTMLImageElement && (target.classList.contains("att-image") || target.classList.contains("embed-image"))) {
-      void api.openUrl(target.src).catch(() => {
-      });
-      return;
-    }
-    const link = target.closest("a[href]");
-    if (link) {
-      e.preventDefault();
-      void api.openUrl(link.href).catch(() => {
-      });
-    }
-  });
-  messageInput.addEventListener("input", () => {
-    messageInput.style.height = "auto";
-    messageInput.style.height = messageInput.scrollHeight + "px";
-  });
-  messageInput.addEventListener("keypress", async (e) => {
-    if (e.key !== "Enter" || e.shiftKey) return;
-    e.preventDefault();
-    const text = messageInput.value.trim();
-    const channelId = state.currentChannelId;
-    if (!text || !channelId) return;
-    messageInput.value = "";
-    messageInput.style.height = "auto";
-    try {
-      const msg = await api.sendMessage(channelId, text);
-      renderMessage(msg, { live: true });
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-    } catch (err) {
-      showError("\u041D\u0435 \u043E\u0442\u043F\u0440\u0430\u0432\u0438\u043B\u043E\u0441\u044C: " + err);
-    }
-  });
 }
 
 // src/ui/voice.ts

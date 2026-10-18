@@ -3,7 +3,6 @@
 import { api, type Attachment, type Channel, type ChatMessage, type Embed } from '../api';
 import { el } from '../dom';
 import { state } from '../state';
-import { roleColor } from './members';
 import { showError } from './toast';
 import { updateBadge } from './unread';
 
@@ -19,21 +18,14 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
-// Упоминание <@id> → «@ник»: имя берём из списка участников сервера, цвет —
-// верхней цветной роли упомянутого (как в официальном клиенте).
+// Упоминание <@id> → «@ник»: имя берём из списка участников сервера; цвет —
+// CSS-переменные --mention-* (настраиваются в одной точке).
 function mentionHtml(id: string): string {
   const m = state.members.find((x) => x.user_id === id);
   if (!m) {
     return `<span class="mention">@${escapeHtml(id)}</span>`;
   }
-  // Роли в member.roles идут по возрастанию — последняя цветная и есть верхняя.
-  let color: string | null = null;
-  for (let i = m.roles.length - 1; i >= 0 && !color; i--) {
-    const r = state.roles.find((x) => x.id === m.roles[i]);
-    if (r) color = roleColor(r.color);
-  }
-  const style = color ? ` style="color:${color}"` : '';
-  return `<span class="mention"${style}>@${escapeHtml(m.username)}</span>`;
+  return `<span class="mention">@${escapeHtml(m.username)}</span>`;
 }
 
 function renderContent(rawHtml: string): string {
@@ -100,13 +92,19 @@ function embedNode(e: Embed): HTMLElement {
   box.innerHTML = parts.join('');
   if (e.video) {
     // Гифки (gifv): Discord отдаёт mp4 в video — играем, как официальный клиент.
+    // WebKit: атрибут loop перезагружает src на петле → видимое мигание; вместо
+    // него — ручной сброс по ended (кадр остаётся, перезапуск гладкий).
     const video = document.createElement('video');
     video.className = 'embed-video';
     video.src = e.video;
     video.autoplay = true;
     video.muted = true;
-    video.loop = true;
     video.playsInline = true;
+    video.preload = 'auto';
+    video.onended = () => {
+      video.currentTime = 0;
+      void video.play().catch(() => {});
+    };
     video.onerror = () => video.remove();
     box.appendChild(video);
   } else if (e.image) {

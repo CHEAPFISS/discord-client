@@ -24,6 +24,11 @@
   --accent-dim: rgba(0, 172, 193, 0.16);
   --on-accent: #00272e;  /* текст/иконки на заливке акцентом */
 
+  /* Упоминания в чате (настраиваемо) */
+  --mention-fg: #4dd0e1;        /* цвет текста @упоминания */
+  --mention-border: #00acc1;    /* обводка (ярко-голубая) */
+  --mention-bg: rgba(0, 172, 193, 0.12);  /* фон-плашка */
+
   /* Семантика */
   --success: #4caf7d;
   --warning: #ffb74d;
@@ -263,8 +268,9 @@ summary:focus-visible {
 .message .time { color: var(--text-low); font-size: 11px; margin-left: auto; white-space: nowrap; }
 .message .text { font-size: 15px; line-height: 1.45; white-space: pre-wrap; color: var(--text-high); }
 .mention {
-  background: var(--accent-dim);
-  color: var(--accent-light);
+  color: var(--mention-fg);
+  background: var(--mention-bg);
+  border: 1px solid var(--mention-border);
   border-radius: 6px;
   padding: 0 4px;
 }
