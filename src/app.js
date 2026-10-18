@@ -203,6 +203,7 @@ var onVoiceStatus = (cb) => subscribe("voice_status", cb);
 var onVoiceChannelReady = (cb) => subscribe("voice_channel_ready", cb);
 var onPresenceUpdate = (cb) => subscribe("presence_update", cb);
 var onVoiceMemberUpdate = (cb) => subscribe("voice_member_update", cb);
+var onVoiceSpeaking = (cb) => subscribe("voice_speaking", cb);
 
 // src/state.ts
 var state = {
@@ -215,6 +216,8 @@ var state = {
   /** Локальные флаги кнопок голосовой панели. */
   micMuted: false,
   deafened: false,
+  /** user_id участников, которые сейчас говорят (зелёная обводка в мини-списке). */
+  voiceSpeaking: /* @__PURE__ */ new Set(),
   /** channelId → количество непрочитанных. */
   unread: /* @__PURE__ */ new Map(),
   /** channelId → DOM-элемент канала (для бейджей). */
@@ -468,11 +471,19 @@ function handlePresenceUpdate(p) {
 function handleVoiceMemberUpdate(p) {
   if (p.guild_id !== state.membersGuildId) return;
   if (p.channel_id) state.memberVoice.set(p.user_id, p.channel_id);
-  else state.memberVoice.delete(p.user_id);
+  else {
+    state.memberVoice.delete(p.user_id);
+    state.voiceSpeaking.delete(p.user_id);
+  }
   if (!state.membersLoading) {
     renderMembers();
     renderVoiceMembers();
   }
+}
+function handleVoiceSpeaking(p) {
+  if (p.speaking) state.voiceSpeaking.add(p.user_id);
+  else state.voiceSpeaking.delete(p.user_id);
+  if (!state.membersLoading) renderVoiceMembers();
 }
 function renderMembers() {
   const membersEl = el("members");
@@ -586,6 +597,7 @@ function renderVoiceMembers() {
 function voiceMemberRow(m) {
   const row = document.createElement("div");
   row.className = "voice-member";
+  if (state.voiceSpeaking.has(m.user_id)) row.classList.add("speaking");
   const av = document.createElement("div");
   av.className = "voice-member-avatar";
   const url = avatarUrl(m);
@@ -684,6 +696,8 @@ function handleVoiceStatus(p) {
     el("voiceCall").classList.remove("active");
     state.micMuted = false;
     state.deafened = false;
+    state.voiceSpeaking.clear();
+    renderVoiceMembers();
     paintVoiceButtons();
   } else if (p.status === "joining") {
     setVoiceStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C\u2026");
@@ -887,6 +901,7 @@ onVoiceChannelReady(() => {
 });
 onPresenceUpdate((p) => handlePresenceUpdate(p));
 onVoiceMemberUpdate((p) => handleVoiceMemberUpdate(p));
+onVoiceSpeaking((p) => handleVoiceSpeaking(p));
 void api.getGatewayStatus().then((p) => setGatewayStatus(p.status, p.error ?? void 0)).catch(() => {
 });
 initLogin();

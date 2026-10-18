@@ -55,6 +55,12 @@ export interface VoiceMemberUpdatePayload {
   channel_id: string | null;
 }
 
+/** VOICE_SPEAKING: индикатор «говорит» (по аудио-кадрам; false — замолчал). */
+export interface VoiceSpeakingPayload {
+  user_id: string;
+  speaking: boolean;
+}
+
 function subscribe<T>(event: string, cb: (p: T) => void): void {
   listen<T>(event, (e) => cb(e.payload)).catch((err) => {
     console.warn(`listen(${event}):`, err);
@@ -78,3 +84,6 @@ export const onPresenceUpdate = (cb: (p: PresenceUpdatePayload) => void): void =
 
 export const onVoiceMemberUpdate = (cb: (p: VoiceMemberUpdatePayload) => void): void =>
   subscribe('voice_member_update', cb);
+
+export const onVoiceSpeaking = (cb: (p: VoiceSpeakingPayload) => void): void =>
+  subscribe('voice_speaking', cb);

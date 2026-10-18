@@ -201,6 +201,11 @@ summary:focus-visible {
 .voice-member:hover { background: var(--surface-3); color: var(--text-high); }
 .voice-member-avatar { position: relative; width: 22px; height: 22px; flex: none; }
 .voice-member-avatar img { width: 22px; height: 22px; border-radius: 50%; display: block; object-fit: cover; }
+/* Говорит: зелёная обводка аватарки (как в Discord). */
+.voice-member.speaking .voice-member-avatar img,
+.voice-member.speaking .voice-member-letter {
+  box-shadow: 0 0 0 2px var(--success);
+}
 .voice-member-letter {
   width: 22px; height: 22px;
   border-radius: 50%;

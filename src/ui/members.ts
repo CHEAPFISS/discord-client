@@ -4,7 +4,7 @@
 
 import { api, type Member } from '../api';
 import { el } from '../dom';
-import type { PresenceUpdatePayload, VoiceMemberUpdatePayload } from '../events';
+import type { PresenceUpdatePayload, VoiceMemberUpdatePayload, VoiceSpeakingPayload } from '../events';
 import { state } from '../state';
 
 /** URL аватарки с CDN Discord (animated → .gif). */
@@ -129,11 +129,21 @@ export function handlePresenceUpdate(p: PresenceUpdatePayload): void {
 export function handleVoiceMemberUpdate(p: VoiceMemberUpdatePayload): void {
   if (p.guild_id !== state.membersGuildId) return;
   if (p.channel_id) state.memberVoice.set(p.user_id, p.channel_id);
-  else state.memberVoice.delete(p.user_id);
+  else {
+    state.memberVoice.delete(p.user_id);
+    state.voiceSpeaking.delete(p.user_id); // вышел из голоса — обводка долой
+  }
   if (!state.membersLoading) {
     renderMembers();
     renderVoiceMembers();
   }
+}
+
+/** VOICE_SPEAKING: зелёная обводка у говорящего в мини-списке голосового канала. */
+export function handleVoiceSpeaking(p: VoiceSpeakingPayload): void {
+  if (p.speaking) state.voiceSpeaking.add(p.user_id);
+  else state.voiceSpeaking.delete(p.user_id);
+  if (!state.membersLoading) renderVoiceMembers();
 }
 
 interface Group {
@@ -279,6 +289,7 @@ export function renderVoiceMembers(): void {
 function voiceMemberRow(m: Member): HTMLElement {
   const row = document.createElement('div');
   row.className = 'voice-member';
+  if (state.voiceSpeaking.has(m.user_id)) row.classList.add('speaking');
 
   const av = document.createElement('div');
   av.className = 'voice-member-avatar';

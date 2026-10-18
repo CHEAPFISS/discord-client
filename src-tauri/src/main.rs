@@ -61,6 +61,8 @@ fn main() {
             // setup идёт вне tokio-контекста — нужен tauri::async_runtime,
             // иначе паника "there is no reactor running".
             tauri::async_runtime::spawn(voice::mic_stats_task(app.handle().clone()));
+            // Индикатор «говорит»: гасит зелёную обводку, когда кадры стихли.
+            tauri::async_runtime::spawn(voice::speaking_watch_task(app.handle().clone()));
             Ok(())
         })
         .run(generate_context!())

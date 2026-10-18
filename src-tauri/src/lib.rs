@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Отправитель сообщений Gateway (op 4, heartbeat и т.д.) — bridges команды к ws-задаче.
 pub struct GatewaySender {
@@ -137,6 +138,48 @@ pub fn parse_presence(p: &serde_json::Value) -> PresenceInfo {
     PresenceInfo { status, activities }
 }
 
+/// Индикатор «говорит» для мини-списка голосового канала.
+///
+/// oto не пробрасывает входящий SPEAKING (op 5), но отдаёт расшифрованные
+/// кадры `AudioReceived` с автором: пока кадры идут — участник говорит.
+/// Зажигаем по первому кадру (насос oto), гасим в `speaking_watch_task`
+/// по паузе без кадров или явным `clear()` при выходе из канала.
+#[derive(Default)]
+pub struct SpeakingTracker {
+    users: Mutex<HashMap<u64, Instant>>,
+}
+
+impl SpeakingTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Кадр от участника. true — он только начал говорить (зажечь индикатор).
+    pub fn mark(&self, user_id: u64) -> bool {
+        let mut map = self.users.lock().unwrap();
+        map.insert(user_id, Instant::now()).is_none()
+    }
+
+    /// Гасит тех, от кого не было кадров дольше hold; возвращает их user_id.
+    pub fn tick(&self, hold: Duration) -> Vec<u64> {
+        let mut map = self.users.lock().unwrap();
+        let stale: Vec<u64> = map
+            .iter()
+            .filter(|(_, at)| at.elapsed() >= hold)
+            .map(|(uid, _)| *uid)
+            .collect();
+        for uid in &stale {
+            map.remove(uid);
+        }
+        stale
+    }
+
+    /// Полный сброс (выход из голоса): возвращает всех, кого надо погасить.
+    pub fn clear(&self) -> Vec<u64> {
+        self.users.lock().unwrap().drain().map(|(uid, _)| uid).collect()
+    }
+}
+
 #[derive(Clone)]
 pub struct DiscordState {
     pub session: Arc<Mutex<Option<DiscordSession>>>,
@@ -152,6 +195,8 @@ pub struct DiscordState {
     pub mic_sender: Arc<Mutex<Option<oto::PacedAudioSender>>>,
     /// Глухота (self_deaf): серверу в op 4 + гашение приёма звука.
     pub self_deaf: Arc<AtomicBool>,
+    /// Индикатор «говорит» для мини-списка голосового канала (зелёная обводка).
+    pub voice_speaking: Arc<SpeakingTracker>,
     /// Presence участников (статус + активности): guild_id → user_id → PresenceInfo.
     pub presences: Arc<Mutex<HashMap<String, HashMap<String, PresenceInfo>>>>,
     /// Кто в каком голосовом канале: guild_id → user_id → channel_id.
@@ -193,6 +238,7 @@ impl Default for DiscordState {
             voice_rejoin: Arc::new(AtomicU64::new(0)),
             mic_sender: Arc::new(Mutex::new(None)),
             self_deaf: Arc::new(AtomicBool::new(false)),
+            voice_speaking: Arc::new(SpeakingTracker::new()),
             presences: Arc::new(Mutex::new(HashMap::new())),
             voice_states: Arc::new(Mutex::new(HashMap::new())),
             guild_member_counts: Arc::new(Mutex::new(HashMap::new())),

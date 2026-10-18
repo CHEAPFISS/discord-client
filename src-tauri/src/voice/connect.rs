@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use discord_client::DiscordState;
 use crate::audio::playback::play_audio_task;
-use crate::voice::{attach_mic_task, request_voice_rejoin};
+use crate::voice::{attach_mic_task, clear_speaking, request_voice_rejoin};
 
 /// Голосовое подключение Discord через oto: Voice Gateway v8 + DAVE (E2EE) + RTP.
 ///
@@ -289,10 +289,19 @@ pub(crate) async fn connect_voice(
                     }
                 }
                 oto::ConnectionEvent::Closed(_) => {
+                    clear_speaking(&pump_app, &pump_state);
                     let _ = pump_app.emit("voice_status", json!({"status": "left"}));
                     break;
                 }
                 oto::ConnectionEvent::AudioReceived { user_id, opus, missing, .. } => {
+                    // Индикатор «говорит»: кадр пришёл — зажигаем сразу (и при deafen:
+                    // обводка должна жить, даже если звук не доигрываем).
+                    if pump_state.voice_speaking.mark(user_id) {
+                        let _ = pump_app.emit(
+                            "voice_speaking",
+                            json!({"user_id": user_id.to_string(), "speaking": true}),
+                        );
+                    }
                     // Кадр уже расшифрован oto (автор определён по ratchet'у
                     // отправителя). По-кадровых логов нет — до 100 кадров/с.
                     // Deafen: кадры не доигрываем вовсе (без расхода декодера).

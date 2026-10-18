@@ -4,6 +4,7 @@ import { api, type Channel } from '../api';
 import { el } from '../dom';
 import type { VoiceStatusPayload } from '../events';
 import { state } from '../state';
+import { renderVoiceMembers } from './members';
 
 export function setVoiceStatus(text: string): void {
   el('voiceStatus').textContent = text;
@@ -91,6 +92,8 @@ export function handleVoiceStatus(p: VoiceStatusPayload): void {
     // Свежий вход в канал всегда unmuted/un-deaf (op 4 при join) — кнопки сбросим.
     state.micMuted = false;
     state.deafened = false;
+    state.voiceSpeaking.clear();
+    renderVoiceMembers();
     paintVoiceButtons();
   } else if (p.status === 'joining') {
     setVoiceStatus('Подключаюсь…');

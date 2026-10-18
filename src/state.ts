@@ -12,6 +12,8 @@ export const state = {
   /** Локальные флаги кнопок голосовой панели. */
   micMuted: false,
   deafened: false,
+  /** user_id участников, которые сейчас говорят (зелёная обводка в мини-списке). */
+  voiceSpeaking: new Set<string>(),
   /** channelId → количество непрочитанных. */
   unread: new Map<string, number>(),
   /** channelId → DOM-элемент канала (для бейджей). */

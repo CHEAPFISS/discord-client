@@ -1,7 +1,7 @@
 use serde_json::json;
 use tauri::{command, AppHandle, Emitter, Manager, State};
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use discord_client::{DiscordState, GatewaySender};
 use crate::audio::mic::MicSource;
@@ -112,6 +112,8 @@ pub(crate) async fn leave_voice_channel(
         let _ = sender.stop().await;
     }
     drop(active_conn);
+    // Обводки «говорит» из покинутого канала больше не актуальны.
+    clear_speaking(&app, &state);
 
     // op 4 — покинуть канал
     let op4 = json!({
@@ -388,6 +390,33 @@ pub(crate) async fn mic_stats_task(app: AppHandle) {
                 stats.source_overruns(),
             );
         }
+    }
+}
+
+/// Индикатор «говорит»: если от участника нет кадров дольше HOLD — гасим обводку.
+/// Зажигает их насос oto по кадрам AudioReceived (входящий SPEAKING oto не отдаёт).
+pub(crate) async fn speaking_watch_task(app: AppHandle) {
+    const HOLD: Duration = Duration::from_millis(250);
+    let mut tick = tokio::time::interval(Duration::from_millis(100));
+    loop {
+        tick.tick().await;
+        let state: State<'_, DiscordState> = app.state();
+        for uid in state.voice_speaking.tick(HOLD) {
+            let _ = app.emit(
+                "voice_speaking",
+                json!({"user_id": uid.to_string(), "speaking": false}),
+            );
+        }
+    }
+}
+
+/// Сброс индикаторов «говорит» (выход из канала/обрыв соединения).
+pub(crate) fn clear_speaking(app: &AppHandle, state: &DiscordState) {
+    for uid in state.voice_speaking.clear() {
+        let _ = app.emit(
+            "voice_speaking",
+            json!({"user_id": uid.to_string(), "speaking": false}),
+        );
     }
 }
 
