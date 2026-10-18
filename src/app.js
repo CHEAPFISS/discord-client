@@ -463,12 +463,17 @@ function renderMessage(msg, opts = {}) {
   div.appendChild(avatarNode(msg));
   const bubble = document.createElement("div");
   bubble.className = "bubble";
+  let content = msg.content;
+  for (const e of msg.embeds) {
+    if (e.kind !== "gifv" || !e.url) continue;
+    content = content.split("\n").filter((line) => line.trim() !== e.url).join("\n");
+  }
   bubble.innerHTML = `
       <div class="header">
         <span class="author">${escapeHtml(msg.author)}</span>
         <span class="time">${fmtTime(msg.timestamp)}</span>
       </div>
-      ${msg.content ? `<div class="text">${renderContent(escapeHtml(msg.content))}</div>` : ""}
+      ${content ? `<div class="text">${renderContent(escapeHtml(content))}</div>` : ""}
   `;
   appendAttachments(bubble, msg);
   for (const e of msg.embeds) {
