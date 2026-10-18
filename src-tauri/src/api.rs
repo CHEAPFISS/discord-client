@@ -1,0 +1,184 @@
+use serde::Serialize;
+use tauri::{command, State};
+
+use discord_client::DiscordState;
+
+pub const API_BASE: &str = "https://discord.com/api/v10";
+
+/// Сервер Discord (либа «гильдия»).
+#[derive(Debug, Serialize)]
+pub struct Guild {
+    pub id: String,
+    pub name: String,
+    pub icon: Option<String>,
+}
+
+/// Текстовый или голосовой канал сервера.
+#[derive(Debug, Serialize)]
+pub struct Channel {
+    pub id: String,
+    pub guild_id: String,
+    pub name: String,
+    /// `type` из API Discord (0 текст, 2 голос и т.д.); наружу отдаём как `kind`
+    #[serde(rename(deserialize = "type"))]
+    pub kind: u8,
+}
+
+/// Сообщение чата, которое отдаём во фронт.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatMessage {
+    pub id: String,
+    pub channel_id: String,
+    pub author: String,
+    pub content: String,
+    pub timestamp: String,
+}
+
+/// GET с bearer-токеном. Возвращает raw JSON (проверку на ошибку API делает вызывающий).
+async fn discord_get(token: &str, url: &str) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    client
+        .get(url)
+        .header("Authorization", token)
+        .send()
+        .await
+        .map_err(|e| format!("Ошибка запроса: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("Ошибка разбора JSON: {e}"))
+}
+
+/// POST JSON с bearer-токеном.
+async fn discord_post_json(
+    token: &str,
+    url: &str,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    client
+        .post(url)
+        .header("Authorization", token)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("Ошибка запроса: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("Ошибка разбора JSON: {e}"))
+}
+
+/// Сообщение API об ошибке, если ответ не массив.
+fn api_error(resp: &serde_json::Value) -> String {
+    format!(
+        "API вернул ошибку: {} (code {})",
+        resp["message"].as_str().unwrap_or("неизвестно"),
+        resp["code"].as_u64().unwrap_or(0)
+    )
+}
+
+#[command]
+pub async fn get_guilds(
+    state: State<'_, DiscordState>,
+) -> Result<Vec<Guild>, String> {
+    let token = state.token().ok_or("Не залогинен")?;
+    let resp = discord_get(&token, &format!("{API_BASE}/users/@me/guilds")).await?;
+
+    let mut guilds = Vec::new();
+    if let Some(arr) = resp.as_array() {
+        for g in arr {
+            guilds.push(Guild {
+                id: g["id"].as_str().unwrap_or("").to_string(),
+                name: g["name"].as_str().unwrap_or("").to_string(),
+                icon: g["icon"].as_str().map(String::from),
+            });
+        }
+    } else {
+        return Err(api_error(&resp));
+    }
+    Ok(guilds)
+}
+
+#[command]
+pub async fn get_channels(
+    state: State<'_, DiscordState>,
+    guild_id: String,
+) -> Result<Vec<Channel>, String> {
+    let token = state.token().ok_or("Не залогинен")?;
+    let resp = discord_get(
+        &token,
+        &format!("{API_BASE}/guilds/{guild_id}/channels"),
+    )
+    .await?;
+
+    let mut channels = Vec::new();
+    if let Some(arr) = resp.as_array() {
+        for c in arr {
+            channels.push(Channel {
+                id: c["id"].as_str().unwrap_or("").to_string(),
+                guild_id: guild_id.clone(),
+                name: c["name"].as_str().unwrap_or("").to_string(),
+                kind: c["kind"].as_u64().unwrap_or(0) as u8,
+            });
+        }
+    } else {
+        return Err(api_error(&resp));
+    }
+    Ok(channels)
+}
+
+#[command]
+pub async fn get_messages(
+    state: State<'_, DiscordState>,
+    channel_id: String,
+) -> Result<Vec<ChatMessage>, String> {
+    let token = state.token().ok_or("Не залогинен")?;
+    let resp = discord_get(
+        &token,
+        &format!("{API_BASE}/channels/{channel_id}/messages?limit=50"),
+    )
+    .await?;
+
+    let mut out = Vec::new();
+    if let Some(arr) = resp.as_array() {
+        for m in arr {
+            out.push(ChatMessage {
+                id: m["id"].as_str().unwrap_or("").to_string(),
+                channel_id: channel_id.clone(),
+                author: m["author"]["username"].as_str().unwrap_or("").to_string(),
+                content: m["content"].as_str().unwrap_or("").to_string(),
+                timestamp: m["timestamp"].as_str().unwrap_or("").to_string(),
+            });
+        }
+    } else {
+        return Err(api_error(&resp));
+    }
+    // API возвращает новые→старые; реверсим для отображения
+    out.reverse();
+    Ok(out)
+}
+
+#[command]
+pub async fn send_message(
+    state: State<'_, DiscordState>,
+    channel_id: String,
+    content: String,
+) -> Result<ChatMessage, String> {
+    let token = state.token().ok_or("Не залогинен")?;
+    let resp = discord_post_json(
+        &token,
+        &format!("{API_BASE}/channels/{channel_id}/messages"),
+        &serde_json::json!({"content": content}),
+    )
+    .await?;
+
+    Ok(ChatMessage {
+        id: resp["id"].as_str().unwrap_or("").to_string(),
+        channel_id,
+        author: resp["author"]["username"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        content: resp["content"].as_str().unwrap_or("").to_string(),
+        timestamp: resp["timestamp"].as_str().unwrap_or("").to_string(),
+    })
+}

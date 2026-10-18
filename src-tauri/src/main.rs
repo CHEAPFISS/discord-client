@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use discord_client::{Channel, ChatMessage, DiscordState, GatewaySender, Guild};
+use discord_client::{read_oauth_config, DiscordState, GatewaySender};
+use crate::api::{get_channels, get_guilds, get_messages, send_message, API_BASE};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
@@ -15,7 +16,8 @@ use std::task::{Context, Poll, Waker};
 
 use oto::{FrameSource, FrameStatus};
 
-const API_BASE: &str = "https://discord.com/api/v10";
+mod api;
+
 const REDIRECT_URI: &str = "http://localhost:1436/callback";
 const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
 
@@ -390,98 +392,7 @@ async fn handle_voice_server(app: &AppHandle, d: &serde_json::Value) {
     }
 }
 
-// --- История и отправка сообщений ---
-
-#[command]
-async fn get_messages(
-    state: State<'_, DiscordState>,
-    channel_id: String,
-) -> Result<Vec<ChatMessage>, String> {
-    let token = state.token().ok_or("Не залогинен")?;
-    let client = reqwest::Client::new();
-    let resp: serde_json::Value = client
-        .get(format!("{API_BASE}/channels/{channel_id}/messages"))
-        .query(&[("limit", "50")])
-        .header("Authorization", token)
-        .send()
-        .await
-        .map_err(|e| format!("Ошибка запроса истории: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("Ошибка разбора истории: {e}"))?;
-
-    let mut out = Vec::new();
-    if let Some(arr) = resp.as_array() {
-        for m in arr {
-            out.push(ChatMessage {
-                id: m["id"].as_str().unwrap_or("").to_string(),
-                channel_id: channel_id.clone(),
-                author: m["author"]["username"].as_str().unwrap_or("").to_string(),
-                content: m["content"].as_str().unwrap_or("").to_string(),
-                timestamp: m["timestamp"].as_str().unwrap_or("").to_string(),
-            });
-        }
-    } else {
-        return Err(format!(
-            "API вернул ошибку: {} (code {})",
-            resp["message"].as_str().unwrap_or("неизвестно"),
-            resp["code"].as_u64().unwrap_or(0)
-        ));
-    }
-    // API возвращает новые→старые; реверсим для отображения
-    out.reverse();
-    Ok(out)
-}
-
-#[command]
-async fn send_message(
-    state: State<'_, DiscordState>,
-    channel_id: String,
-    content: String,
-) -> Result<ChatMessage, String> {
-    let token = state.token().ok_or("Не залогинен")?;
-    let client = reqwest::Client::new();
-    let resp: serde_json::Value = client
-        .post(format!("{API_BASE}/channels/{channel_id}/messages"))
-        .header("Authorization", token)
-        .json(&json!({"content": content}))
-        .send()
-        .await
-        .map_err(|e| format!("Ошибка отправки: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("Ошибка разбора ответа отправки: {e}"))?;
-
-    Ok(ChatMessage {
-        id: resp["id"].as_str().unwrap_or("").to_string(),
-        channel_id,
-        author: resp["author"]["username"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
-        content: resp["content"].as_str().unwrap_or("").to_string(),
-        timestamp: resp["timestamp"].as_str().unwrap_or("").to_string(),
-    })
-}
-
 // --- OAuth ---
-
-#[derive(Debug, Deserialize)]
-struct OAuthConfig {
-    client_id: String,
-    client_secret: String,
-}
-
-fn read_oauth_config() -> Result<OAuthConfig, String> {
-    let path = discord_client::app_config_dir().join("config.json");
-    let text = std::fs::read_to_string(&path).map_err(|_| {
-        format!(
-            "Не найден конфиг {}. Создай его с содержимым:\n{{\"client_id\": \"ТВОЙ_CLIENT_ID\", \"client_secret\": \"ТВОЙ_CLIENT_SECRET\"}}\n(id/secret из Discord Developer Portal → твоё приложение → OAuth2)",
-            path.display()
-        )
-    })?;
-    serde_json::from_str(&text).map_err(|e| format!("Ошибка разбора {}: {e}", path.display()))
-}
 
 #[command]
 fn get_me(state: State<'_, DiscordState>) -> Result<serde_json::Value, String> {
@@ -707,77 +618,7 @@ async fn wait_for_code_on(
     }
 }
 
-// --- REST Discord ---
 
-#[command]
-async fn get_guilds(state: State<'_, DiscordState>) -> Result<Vec<Guild>, String> {
-    let token = state.token().ok_or("Не залогинен")?;
-    let client = reqwest::Client::new();
-    let resp: serde_json::Value = client
-        .get(format!("{API_BASE}/users/@me/guilds"))
-        .header("Authorization", token)
-        .send()
-        .await
-        .map_err(|e| format!("Ошибка запроса серверов: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("Ошибка разбора списка серверов: {e}"))?;
-
-    let mut guilds = Vec::new();
-    if let Some(arr) = resp.as_array() {
-        for g in arr {
-            guilds.push(Guild {
-                id: g["id"].as_str().unwrap_or("").to_string(),
-                name: g["name"].as_str().unwrap_or("").to_string(),
-                icon: g["icon"].as_str().map(String::from),
-            });
-        }
-    } else {
-        return Err(format!(
-            "API вернул ошибку: {} (code {})",
-            resp["message"].as_str().unwrap_or("неизвестно"),
-            resp["code"].as_u64().unwrap_or(0)
-        ));
-    }
-    Ok(guilds)
-}
-
-#[command]
-async fn get_channels(
-    state: State<'_, DiscordState>,
-    guild_id: String,
-) -> Result<Vec<Channel>, String> {
-    let token = state.token().ok_or("Не залогинен")?;
-    let client = reqwest::Client::new();
-    let resp: serde_json::Value = client
-        .get(format!("{API_BASE}/guilds/{guild_id}/channels"))
-        .header("Authorization", token)
-        .send()
-        .await
-        .map_err(|e| format!("Ошибка запроса каналов: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("Ошибка разбора списка каналов: {e}"))?;
-
-    let mut channels = Vec::new();
-    if let Some(arr) = resp.as_array() {
-        for c in arr {
-            channels.push(Channel {
-                id: c["id"].as_str().unwrap_or("").to_string(),
-                guild_id: guild_id.clone(),
-                name: c["name"].as_str().unwrap_or("").to_string(),
-                kind: c["type"].as_u64().unwrap_or(0) as u8,
-            });
-        }
-    } else {
-        return Err(format!(
-            "API вернул ошибку: {} (code {})",
-            resp["message"].as_str().unwrap_or("неизвестно"),
-            resp["code"].as_u64().unwrap_or(0)
-        ));
-    }
-    Ok(channels)
-}
 
 #[command]
 async fn join_voice_channel(
