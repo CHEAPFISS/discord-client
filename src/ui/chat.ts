@@ -30,7 +30,7 @@ function mentionHtml(id: string): string {
 
 function renderContent(rawHtml: string): string {
   return (
-    rawHtml
+    linkify(rawHtml)
       // Упоминания <@id>/<@!id> → @ник с цветом роли
       .replace(/&lt;@(!?)(\d+)&gt;/g, (_, _bang: string, id: string) => mentionHtml(id))
       // Спойлеры ||текст|| — скрыты до клика
@@ -38,11 +38,11 @@ function renderContent(rawHtml: string): string {
   );
 }
 
-/** Голый URL в тексте → кликабельная ссылка (текст уже html-экранирован). */
+/** Голый URL в тексте → кликабельная подсвеченная ссылка (текст уже html-экранирован). */
 function linkify(escaped: string): string {
   return escaped.replace(
     /(https?:\/\/[^\s<]+)/g,
-    (u) => `<a class="embed-link" href="${u.replace(/"/g, '%22')}">${u}</a>`,
+    (u) => `<a class="link" href="${u.replace(/"/g, '%22')}">${u}</a>`,
   );
 }
 
@@ -57,10 +57,36 @@ function isVideo(a: Attachment): boolean {
   return (a.content_type ?? '').startsWith('video/') || VIDEO_EXT.test(a.url);
 }
 
+/** gifv-эмбед (гифка со ссылки) — как картинка-аттачмент: голая гифка + метка GIF. */
+function gifNode(e: Embed): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'gif-item';
+  const video = document.createElement('video');
+  video.className = 'gif-video';
+  video.src = e.video ?? '';
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+  // WebKit: loop перезагружает src на петле (видимое мигание) — перезапуск вручную.
+  video.onended = () => {
+    video.currentTime = 0;
+    void video.play().catch(() => {});
+  };
+  video.onerror = () => wrap.remove();
+  wrap.appendChild(video);
+  const label = document.createElement('span');
+  label.className = 'gif-label';
+  label.textContent = 'GIF';
+  wrap.appendChild(label);
+  return wrap;
+}
+
 /** Embed-карточка: цветная полоса, автор/заголовок/описание/поля/картинки. */
 function embedNode(e: Embed): HTMLElement {
   const box = document.createElement('div');
   box.className = 'msg-embed';
+  if (e.url) box.dataset.url = e.url;
   if (e.color != null) {
     box.style.borderLeftColor = '#' + e.color.toString(16).padStart(6, '0');
   }
@@ -90,10 +116,22 @@ function embedNode(e: Embed): HTMLElement {
   }
   if (e.footer) parts.push(`<div class="embed-footer">${escapeHtml(e.footer)}</div>`);
   box.innerHTML = parts.join('');
-  if (e.video) {
-    // Гифки (gifv): Discord отдаёт mp4 в video — играем, как официальный клиент.
-    // WebKit: атрибут loop перезагружает src на петле → видимое мигание; вместо
-    // него — ручной сброс по ended (кадр остаётся, перезапуск гладкий).
+  if (e.kind === 'video' && e.image) {
+    // Видео-превью (YouTube и пр.): картинка + play-иконка, как у официального.
+    const media = document.createElement('div');
+    media.className = 'embed-media';
+    const img = document.createElement('img');
+    img.className = 'embed-image';
+    img.src = e.image;
+    img.loading = 'lazy';
+    media.appendChild(img);
+    const badge = document.createElement('span');
+    badge.className = 'play-badge';
+    media.appendChild(badge);
+    box.appendChild(media);
+  } else if (e.video) {
+    // gifv-фолбэк (основной путь — gifNode в renderMessage): mp4 без loop,
+    // перезапуск вручную по ended — WebKit на loop перезагружает src (мигание).
     const video = document.createElement('video');
     video.className = 'embed-video';
     video.src = e.video;
@@ -197,7 +235,11 @@ function renderMessage(msg: ChatMessage, opts: { live?: boolean } = {}): void {
       ${msg.content ? `<div class="text">${renderContent(escapeHtml(msg.content))}</div>` : ''}
   `;
   appendAttachments(bubble, msg);
-  for (const e of msg.embeds) bubble.appendChild(embedNode(e));
+  for (const e of msg.embeds) {
+    // Гифки со ссылок — голым медио («GIF»), а не embed-карточкой с пустотой.
+    if (e.kind === 'gifv' && e.video) bubble.appendChild(gifNode(e));
+    else bubble.appendChild(embedNode(e));
+  }
   div.appendChild(bubble);
   messagesEl.appendChild(div);
   if (!opts.live) return;
@@ -256,14 +298,25 @@ export function initChatInput(): void {
       target.classList.replace('spoiler', 'revealed');
       return;
     }
-    if (
-      target instanceof HTMLImageElement &&
-      (target.classList.contains('att-image') || target.classList.contains('embed-image'))
-    ) {
+    if (target instanceof HTMLImageElement && target.classList.contains('att-image')) {
       void api.openUrl(target.src).catch(() => {});
       return;
     }
     const link = target.closest('a[href]') as HTMLAnchorElement | null;
+    const emb = target.closest('.msg-embed') as HTMLElement | null;
+    // Embed-карточка кликабельна целиком (как у официального): её ссылка;
+    // если ссылки нет — сама картинка карточки.
+    if (emb && !link) {
+      if (emb.dataset.url) {
+        e.preventDefault();
+        void api.openUrl(emb.dataset.url).catch(() => {});
+        return;
+      }
+      if (target instanceof HTMLImageElement && target.classList.contains('embed-image')) {
+        void api.openUrl(target.src).catch(() => {});
+        return;
+      }
+    }
     if (link) {
       e.preventDefault();
       void api.openUrl(link.href).catch(() => {});

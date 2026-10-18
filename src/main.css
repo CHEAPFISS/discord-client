@@ -29,6 +29,9 @@
   --mention-border: #00acc1;    /* обводка (ярко-голубая) */
   --mention-bg: rgba(0, 172, 193, 0.12);  /* фон-плашка */
 
+  /* Ссылки в чате (настраиваемо) */
+  --link: #00a8fc;              /* подсветка ссылок (как в официальном Discord) */
+
   /* Семантика */
   --success: #4caf7d;
   --warning: #ffb74d;
@@ -402,6 +405,7 @@ textarea::placeholder { color: var(--text-low); }
 .att-file:hover { text-decoration: underline; }
 .msg-embed {
   position: relative;
+  display: inline-block;  /* карточка по ширине контента, как у официального */
   margin-top: 6px;
   max-width: 520px;
   border-left: 4px solid var(--accent);
@@ -409,6 +413,7 @@ textarea::placeholder { color: var(--text-low); }
   border-radius: 4px 8px 8px 4px;
   padding: 10px 12px;
 }
+.msg-embed[data-url] { cursor: pointer; }
 .msg-embed.with-thumb { padding-right: 96px; }
 .embed-author { font-size: 13px; font-weight: 600; color: var(--text-high); }
 .embed-title {
@@ -450,7 +455,47 @@ textarea::placeholder { color: var(--text-low); }
   border-radius: 8px; object-fit: cover;
 }
 .embed-footer { margin-top: 6px; font-size: 12px; color: var(--text-low); }
-.embed-link { color: var(--accent-light); }
+/* Голые URL и ссылки в embed-описаниях — подсветка (--link) */
+.link { color: var(--link); text-decoration: none; }
+.link:hover { text-decoration: underline; }
+
+/* gifv — голая гифка + метка GIF (как аттачменты официального клиента) */
+.gif-item { display: inline-block; margin-top: 6px; }
+.gif-video {
+  display: block;
+  max-height: 350px; max-width: 100%;
+  border-radius: 12px;
+  background: #000;
+}
+.gif-label {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px; color: var(--text-low);
+}
+
+/* Видео-превью embed-карточки: картинка с play-иконкой */
+.embed-media {
+  position: relative;
+  display: block;
+  margin-top: 8px;
+}
+.embed-media .embed-image { margin-top: 0; }
+.play-badge {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px; height: 48px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.72);
+  pointer-events: none;
+}
+.play-badge::after {
+  content: '';
+  position: absolute; left: 56%; top: 50%;
+  transform: translate(-50%, -50%);
+  border-left: 15px solid #fff;
+  border-top: 9px solid transparent;
+  border-bottom: 9px solid transparent;
+}
 .message .avatar img {
   width: 100%; height: 100%;
   border-radius: 50%; object-fit: cover; display: block;

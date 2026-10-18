@@ -297,12 +297,12 @@ function mentionHtml(id) {
   return `<span class="mention">@${escapeHtml(m.username)}</span>`;
 }
 function renderContent(rawHtml) {
-  return rawHtml.replace(/&lt;@(!?)(\d+)&gt;/g, (_, _bang, id) => mentionHtml(id)).replace(/\|\|(.+?)\|\|/gs, '<span class="spoiler">$1</span>');
+  return linkify(rawHtml).replace(/&lt;@(!?)(\d+)&gt;/g, (_, _bang, id) => mentionHtml(id)).replace(/\|\|(.+?)\|\|/gs, '<span class="spoiler">$1</span>');
 }
 function linkify(escaped) {
   return escaped.replace(
     /(https?:\/\/[^\s<]+)/g,
-    (u) => `<a class="embed-link" href="${u.replace(/"/g, "%22")}">${u}</a>`
+    (u) => `<a class="link" href="${u.replace(/"/g, "%22")}">${u}</a>`
   );
 }
 var IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif)(\?.*)?$/i;
@@ -313,9 +313,33 @@ function isImage(a) {
 function isVideo(a) {
   return (a.content_type ?? "").startsWith("video/") || VIDEO_EXT.test(a.url);
 }
+function gifNode(e) {
+  const wrap = document.createElement("div");
+  wrap.className = "gif-item";
+  const video = document.createElement("video");
+  video.className = "gif-video";
+  video.src = e.video ?? "";
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  video.onended = () => {
+    video.currentTime = 0;
+    void video.play().catch(() => {
+    });
+  };
+  video.onerror = () => wrap.remove();
+  wrap.appendChild(video);
+  const label = document.createElement("span");
+  label.className = "gif-label";
+  label.textContent = "GIF";
+  wrap.appendChild(label);
+  return wrap;
+}
 function embedNode(e) {
   const box = document.createElement("div");
   box.className = "msg-embed";
+  if (e.url) box.dataset.url = e.url;
   if (e.color != null) {
     box.style.borderLeftColor = "#" + e.color.toString(16).padStart(6, "0");
   }
@@ -338,7 +362,19 @@ function embedNode(e) {
   }
   if (e.footer) parts.push(`<div class="embed-footer">${escapeHtml(e.footer)}</div>`);
   box.innerHTML = parts.join("");
-  if (e.video) {
+  if (e.kind === "video" && e.image) {
+    const media = document.createElement("div");
+    media.className = "embed-media";
+    const img = document.createElement("img");
+    img.className = "embed-image";
+    img.src = e.image;
+    img.loading = "lazy";
+    media.appendChild(img);
+    const badge = document.createElement("span");
+    badge.className = "play-badge";
+    media.appendChild(badge);
+    box.appendChild(media);
+  } else if (e.video) {
     const video = document.createElement("video");
     video.className = "embed-video";
     video.src = e.video;
@@ -435,7 +471,10 @@ function renderMessage(msg, opts = {}) {
       ${msg.content ? `<div class="text">${renderContent(escapeHtml(msg.content))}</div>` : ""}
   `;
   appendAttachments(bubble, msg);
-  for (const e of msg.embeds) bubble.appendChild(embedNode(e));
+  for (const e of msg.embeds) {
+    if (e.kind === "gifv" && e.video) bubble.appendChild(gifNode(e));
+    else bubble.appendChild(embedNode(e));
+  }
   div.appendChild(bubble);
   messagesEl.appendChild(div);
   if (!opts.live) return;
@@ -485,12 +524,26 @@ function initChatInput() {
       target.classList.replace("spoiler", "revealed");
       return;
     }
-    if (target instanceof HTMLImageElement && (target.classList.contains("att-image") || target.classList.contains("embed-image"))) {
+    if (target instanceof HTMLImageElement && target.classList.contains("att-image")) {
       void api.openUrl(target.src).catch(() => {
       });
       return;
     }
     const link = target.closest("a[href]");
+    const emb = target.closest(".msg-embed");
+    if (emb && !link) {
+      if (emb.dataset.url) {
+        e.preventDefault();
+        void api.openUrl(emb.dataset.url).catch(() => {
+        });
+        return;
+      }
+      if (target instanceof HTMLImageElement && target.classList.contains("embed-image")) {
+        void api.openUrl(target.src).catch(() => {
+        });
+        return;
+      }
+    }
     if (link) {
       e.preventDefault();
       void api.openUrl(link.href).catch(() => {

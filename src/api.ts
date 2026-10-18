@@ -37,6 +37,8 @@ export interface EmbedField {
 
 /** Embed-карточка сообщения (превью ссылки и т.п.). */
 export interface Embed {
+  /** Тип: rich | image | gifv | video | link … */
+  kind: string;
   title?: string | null;
   description?: string | null;
   url?: string | null;

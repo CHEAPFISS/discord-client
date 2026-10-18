@@ -44,6 +44,8 @@ pub struct EmbedField {
 /// Embed-карточка сообщения (превью ссылки, тенор-GIF и т.п.) — нужное подмножество полей Discord.
 #[derive(Debug, Clone, Serialize)]
 pub struct Embed {
+    /// Тип эмбеда Discord: rich | image | gifv | video | link …
+    pub kind: String,
     pub title: Option<String>,
     pub description: Option<String>,
     pub url: Option<String>,
@@ -94,6 +96,7 @@ pub fn parse_message(d: &serde_json::Value) -> ChatMessage {
         .map(|arr| {
             arr.iter()
                 .map(|e| Embed {
+                    kind: e["type"].as_str().unwrap_or("rich").to_string(),
                     title: e["title"].as_str().map(str::to_string),
                     description: e["description"].as_str().map(str::to_string),
                     url: e["url"].as_str().map(str::to_string),
