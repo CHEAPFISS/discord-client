@@ -36,6 +36,7 @@ fn main() {
             api::get_guild_activity,
             api::get_messages,
             api::send_message,
+            api::open_url,
             // Auth
             auth::start_login,
             auth::login_with_token,

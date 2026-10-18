@@ -136,6 +136,8 @@ var api = {
   getGuildActivity: (guildId) => invoke("get_guild_activity", { guildId }),
   getMessages: (channelId) => invoke("get_messages", { channelId }),
   sendMessage: (channelId, content) => invoke("send_message", { channelId, content }),
+  /** Открыть ссылку (картинка/файл из чата) в системном браузере. */
+  openUrl: (url) => invoke("open_url", { url }),
   // --- Gateway ---
   getGatewayStatus: () => invoke("get_gateway_status"),
   // --- Голос ---
@@ -290,6 +292,91 @@ function escapeHtml(text) {
 function renderContent(rawHtml) {
   return rawHtml.replace(/&lt;@(!?\d+)&gt;/g, '<span class="mention">@$1</span>');
 }
+function linkify(escaped) {
+  return escaped.replace(
+    /(https?:\/\/[^\s<]+)/g,
+    (u) => `<a class="embed-link" href="${u.replace(/"/g, "%22")}">${u}</a>`
+  );
+}
+var IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif)(\?.*)?$/i;
+var VIDEO_EXT = /\.(mp4|webm|mov)(\?.*)?$/i;
+function isImage(a) {
+  return (a.content_type ?? "").startsWith("image/") || IMAGE_EXT.test(a.url);
+}
+function isVideo(a) {
+  return (a.content_type ?? "").startsWith("video/") || VIDEO_EXT.test(a.url);
+}
+function embedNode(e) {
+  const box = document.createElement("div");
+  box.className = "msg-embed";
+  if (e.color != null) {
+    box.style.borderLeftColor = "#" + e.color.toString(16).padStart(6, "0");
+  }
+  const parts = [];
+  if (e.author) parts.push(`<div class="embed-author">${escapeHtml(e.author)}</div>`);
+  if (e.title) {
+    const t = escapeHtml(e.title);
+    parts.push(
+      e.url ? `<a class="embed-title" href="${e.url.replace(/"/g, "%22")}">${t}</a>` : `<div class="embed-title">${t}</div>`
+    );
+  }
+  if (e.description) {
+    parts.push(`<div class="embed-desc">${linkify(escapeHtml(e.description))}</div>`);
+  }
+  if (e.fields.length > 0) {
+    const fields = e.fields.map(
+      (f) => `<div class="embed-field${f.inline ? " inline" : ""}"><div class="ef-name">${escapeHtml(f.name)}</div><div class="ef-value">${linkify(escapeHtml(f.value))}</div></div>`
+    ).join("");
+    parts.push(`<div class="embed-fields">${fields}</div>`);
+  }
+  if (e.footer) parts.push(`<div class="embed-footer">${escapeHtml(e.footer)}</div>`);
+  box.innerHTML = parts.join("");
+  if (e.image) {
+    const img = document.createElement("img");
+    img.className = "embed-image";
+    img.src = e.image;
+    img.loading = "lazy";
+    box.appendChild(img);
+  }
+  if (e.thumbnail) {
+    box.classList.add("with-thumb");
+    const th = document.createElement("img");
+    th.className = "embed-thumb";
+    th.src = e.thumbnail;
+    th.loading = "lazy";
+    box.appendChild(th);
+  }
+  return box;
+}
+function appendAttachments(bubble, msg) {
+  const media = document.createElement("div");
+  media.className = "att-media";
+  for (const a of msg.attachments) {
+    if (isImage(a)) {
+      const img = document.createElement("img");
+      img.className = "att-image";
+      img.src = a.url;
+      img.alt = a.filename;
+      img.loading = "lazy";
+      img.title = "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435";
+      media.appendChild(img);
+    } else if (isVideo(a)) {
+      const video = document.createElement("video");
+      video.className = "att-video";
+      video.src = a.url;
+      video.controls = true;
+      video.preload = "metadata";
+      media.appendChild(video);
+    } else {
+      const link = document.createElement("a");
+      link.className = "att-file";
+      link.href = a.url;
+      link.textContent = `\u{1F4CE} ${a.filename}`;
+      bubble.appendChild(link);
+    }
+  }
+  if (media.childElementCount > 0) bubble.appendChild(media);
+}
 function renderMessage(msg, opts = {}) {
   const messagesEl = el("messages");
   const existingEmpty = messagesEl.querySelector(".messages-empty");
@@ -304,9 +391,12 @@ function renderMessage(msg, opts = {}) {
         <span class="author">${escapeHtml(msg.author)}</span>
         <span class="time">${fmtTime(msg.timestamp)}</span>
       </div>
-      <div class="text">${renderContent(escapeHtml(msg.content))}</div>
+      ${msg.content ? `<div class="text">${renderContent(escapeHtml(msg.content))}</div>` : ""}
     </div>
   `;
+  const bubble = div.querySelector(".bubble");
+  appendAttachments(bubble, msg);
+  for (const e of msg.embeds) bubble.appendChild(embedNode(e));
   messagesEl.appendChild(div);
   if (!opts.live) return;
   const atBottom = messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - 40;
@@ -349,6 +439,20 @@ function appendLiveMessage(msg) {
 function initChatInput() {
   const messageInput = el("messageInput");
   const messagesEl = el("messages");
+  messagesEl.addEventListener("click", (e) => {
+    const target = e.target;
+    if (target instanceof HTMLImageElement && (target.classList.contains("att-image") || target.classList.contains("embed-image"))) {
+      void api.openUrl(target.src).catch(() => {
+      });
+      return;
+    }
+    const link = target.closest("a[href]");
+    if (link) {
+      e.preventDefault();
+      void api.openUrl(link.href).catch(() => {
+      });
+    }
+  });
   messageInput.addEventListener("input", () => {
     messageInput.style.height = "auto";
     messageInput.style.height = messageInput.scrollHeight + "px";

@@ -23,6 +23,38 @@ pub struct Channel {
     pub kind: u8,
 }
 
+/// Вложение сообщения (картинка, GIF, видео или файл).
+#[derive(Debug, Clone, Serialize)]
+pub struct Attachment {
+    pub url: String,
+    pub filename: String,
+    pub content_type: Option<String>,
+    pub width: Option<u64>,
+    pub height: Option<u64>,
+}
+
+/// Поле embed-карточки.
+#[derive(Debug, Clone, Serialize)]
+pub struct EmbedField {
+    pub name: String,
+    pub value: String,
+    pub inline: bool,
+}
+
+/// Embed-карточка сообщения (превью ссылки, тенор-GIF и т.п.) — нужное подмножество полей Discord.
+#[derive(Debug, Clone, Serialize)]
+pub struct Embed {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub url: Option<String>,
+    pub color: Option<u64>,
+    pub image: Option<String>,
+    pub thumbnail: Option<String>,
+    pub author: Option<String>,
+    pub footer: Option<String>,
+    pub fields: Vec<EmbedField>,
+}
+
 /// Сообщение чата, которое отдаём во фронт.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
@@ -31,6 +63,66 @@ pub struct ChatMessage {
     pub author: String,
     pub content: String,
     pub timestamp: String,
+    pub attachments: Vec<Attachment>,
+    pub embeds: Vec<Embed>,
+}
+
+/// Разбирает сообщение Discord (единый формат у REST-истории и gateway MESSAGE_CREATE).
+pub fn parse_message(d: &serde_json::Value) -> ChatMessage {
+    let attachments = d["attachments"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| {
+                    Some(Attachment {
+                        url: a["url"].as_str()?.to_string(),
+                        filename: a["filename"].as_str().unwrap_or("файл").to_string(),
+                        content_type: a["content_type"].as_str().map(str::to_string),
+                        width: a["width"].as_u64(),
+                        height: a["height"].as_u64(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let embeds = d["embeds"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|e| Embed {
+                    title: e["title"].as_str().map(str::to_string),
+                    description: e["description"].as_str().map(str::to_string),
+                    url: e["url"].as_str().map(str::to_string),
+                    color: e["color"].as_u64(),
+                    image: e["image"]["url"].as_str().map(str::to_string),
+                    thumbnail: e["thumbnail"]["url"].as_str().map(str::to_string),
+                    author: e["author"]["name"].as_str().map(str::to_string),
+                    footer: e["footer"]["text"].as_str().map(str::to_string),
+                    fields: e["fields"]
+                        .as_array()
+                        .map(|f| {
+                            f.iter()
+                                .map(|x| EmbedField {
+                                    name: x["name"].as_str().unwrap_or("").to_string(),
+                                    value: x["value"].as_str().unwrap_or("").to_string(),
+                                    inline: x["inline"].as_bool().unwrap_or(false),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ChatMessage {
+        id: d["id"].as_str().unwrap_or("").to_string(),
+        channel_id: d["channel_id"].as_str().unwrap_or("").to_string(),
+        author: d["author"]["username"].as_str().unwrap_or("").to_string(),
+        content: d["content"].as_str().unwrap_or("").to_string(),
+        timestamp: d["timestamp"].as_str().unwrap_or("").to_string(),
+        attachments,
+        embeds,
+    }
 }
 
 /// Роль сервера (для группировки участников по ролям).
@@ -208,13 +300,11 @@ pub async fn get_messages(
     let mut out = Vec::new();
     if let Some(arr) = resp.as_array() {
         for m in arr {
-            out.push(ChatMessage {
-                id: m["id"].as_str().unwrap_or("").to_string(),
-                channel_id: channel_id.clone(),
-                author: m["author"]["username"].as_str().unwrap_or("").to_string(),
-                content: m["content"].as_str().unwrap_or("").to_string(),
-                timestamp: m["timestamp"].as_str().unwrap_or("").to_string(),
-            });
+            let mut msg = parse_message(m);
+            if msg.channel_id.is_empty() {
+                msg.channel_id = channel_id.clone();
+            }
+            out.push(msg);
         }
     } else {
         return Err(api_error(&resp));
@@ -238,14 +328,22 @@ pub async fn send_message(
     )
     .await?;
 
-    Ok(ChatMessage {
-        id: resp["id"].as_str().unwrap_or("").to_string(),
-        channel_id,
-        author: resp["author"]["username"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
-        content: resp["content"].as_str().unwrap_or("").to_string(),
-        timestamp: resp["timestamp"].as_str().unwrap_or("").to_string(),
-    })
+    let mut msg = parse_message(&resp);
+    if msg.channel_id.is_empty() {
+        msg.channel_id = channel_id;
+    }
+    Ok(msg)
+}
+
+/// Открыть ссылку (картинка/файл/ссылка из чата) в системном браузере.
+#[command]
+pub fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("Разрешены только http(s)-ссылки".into());
+    }
+    std::process::Command::new("xdg-open")
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Не удалось открыть: {e}"))
 }

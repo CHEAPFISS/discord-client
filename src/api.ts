@@ -19,6 +19,35 @@ export interface Channel {
   kind: number;
 }
 
+/** Вложение сообщения (картинка, GIF, видео или файл). */
+export interface Attachment {
+  url: string;
+  filename: string;
+  content_type?: string | null;
+  width?: number | null;
+  height?: number | null;
+}
+
+/** Поле embed-карточки. */
+export interface EmbedField {
+  name: string;
+  value: string;
+  inline: boolean;
+}
+
+/** Embed-карточка сообщения (превью ссылки и т.п.). */
+export interface Embed {
+  title?: string | null;
+  description?: string | null;
+  url?: string | null;
+  color?: number | null;
+  image?: string | null;
+  thumbnail?: string | null;
+  author?: string | null;
+  footer?: string | null;
+  fields: EmbedField[];
+}
+
 /** Сообщение чата. */
 export interface ChatMessage {
   id: string;
@@ -26,6 +55,8 @@ export interface ChatMessage {
   author: string;
   content: string;
   timestamp: string;
+  attachments: Attachment[];
+  embeds: Embed[];
 }
 
 /** Участник сервера. */
@@ -102,6 +133,8 @@ export const api = {
   getMessages: (channelId: string) => invoke<ChatMessage[]>('get_messages', { channelId }),
   sendMessage: (channelId: string, content: string) =>
     invoke<ChatMessage>('send_message', { channelId, content }),
+  /** Открыть ссылку (картинка/файл из чата) в системном браузере. */
+  openUrl: (url: string) => invoke<void>('open_url', { url }),
 
   // --- Gateway ---
   getGatewayStatus: () =>

@@ -1,6 +1,6 @@
 // Текстовый чат: история, рендер сообщений, отправка.
 
-import { api, type Channel, type ChatMessage } from '../api';
+import { api, type Attachment, type Channel, type ChatMessage, type Embed } from '../api';
 import { el } from '../dom';
 import { state } from '../state';
 import { showError } from './toast';
@@ -23,6 +23,107 @@ function renderContent(rawHtml: string): string {
   return rawHtml.replace(/&lt;@(!?\d+)&gt;/g, '<span class="mention">@$1</span>');
 }
 
+/** Голый URL в тексте → кликабельная ссылка (текст уже html-экранирован). */
+function linkify(escaped: string): string {
+  return escaped.replace(
+    /(https?:\/\/[^\s<]+)/g,
+    (u) => `<a class="embed-link" href="${u.replace(/"/g, '%22')}">${u}</a>`,
+  );
+}
+
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif)(\?.*)?$/i;
+const VIDEO_EXT = /\.(mp4|webm|mov)(\?.*)?$/i;
+
+function isImage(a: Attachment): boolean {
+  return (a.content_type ?? '').startsWith('image/') || IMAGE_EXT.test(a.url);
+}
+
+function isVideo(a: Attachment): boolean {
+  return (a.content_type ?? '').startsWith('video/') || VIDEO_EXT.test(a.url);
+}
+
+/** Embed-карточка: цветная полоса, автор/заголовок/описание/поля/картинки. */
+function embedNode(e: Embed): HTMLElement {
+  const box = document.createElement('div');
+  box.className = 'msg-embed';
+  if (e.color != null) {
+    box.style.borderLeftColor = '#' + e.color.toString(16).padStart(6, '0');
+  }
+  const parts: string[] = [];
+  if (e.author) parts.push(`<div class="embed-author">${escapeHtml(e.author)}</div>`);
+  if (e.title) {
+    const t = escapeHtml(e.title);
+    parts.push(
+      e.url
+        ? `<a class="embed-title" href="${e.url.replace(/"/g, '%22')}">${t}</a>`
+        : `<div class="embed-title">${t}</div>`,
+    );
+  }
+  if (e.description) {
+    parts.push(`<div class="embed-desc">${linkify(escapeHtml(e.description))}</div>`);
+  }
+  if (e.fields.length > 0) {
+    const fields = e.fields
+      .map(
+        (f) =>
+          `<div class="embed-field${f.inline ? ' inline' : ''}">` +
+          `<div class="ef-name">${escapeHtml(f.name)}</div>` +
+          `<div class="ef-value">${linkify(escapeHtml(f.value))}</div></div>`,
+      )
+      .join('');
+    parts.push(`<div class="embed-fields">${fields}</div>`);
+  }
+  if (e.footer) parts.push(`<div class="embed-footer">${escapeHtml(e.footer)}</div>`);
+  box.innerHTML = parts.join('');
+  if (e.image) {
+    const img = document.createElement('img');
+    img.className = 'embed-image';
+    img.src = e.image;
+    img.loading = 'lazy';
+    box.appendChild(img);
+  }
+  if (e.thumbnail) {
+    box.classList.add('with-thumb');
+    const th = document.createElement('img');
+    th.className = 'embed-thumb';
+    th.src = e.thumbnail;
+    th.loading = 'lazy';
+    box.appendChild(th);
+  }
+  return box;
+}
+
+/** Вложения после текста: картинки/GIF и видео — превью, прочее — карточка файла. */
+function appendAttachments(bubble: HTMLElement, msg: ChatMessage): void {
+  const media = document.createElement('div');
+  media.className = 'att-media';
+  for (const a of msg.attachments) {
+    if (isImage(a)) {
+      const img = document.createElement('img');
+      img.className = 'att-image';
+      img.src = a.url;
+      img.alt = a.filename;
+      img.loading = 'lazy';
+      img.title = 'Открыть в браузере';
+      media.appendChild(img);
+    } else if (isVideo(a)) {
+      const video = document.createElement('video');
+      video.className = 'att-video';
+      video.src = a.url;
+      video.controls = true;
+      video.preload = 'metadata';
+      media.appendChild(video);
+    } else {
+      const link = document.createElement('a');
+      link.className = 'att-file';
+      link.href = a.url;
+      link.textContent = `📎 ${a.filename}`;
+      bubble.appendChild(link);
+    }
+  }
+  if (media.childElementCount > 0) bubble.appendChild(media);
+}
+
 function renderMessage(msg: ChatMessage, opts: { live?: boolean } = {}): void {
   const messagesEl = el('messages');
   // Убираем заглушку "пусто" при первом сообщении
@@ -39,9 +140,12 @@ function renderMessage(msg: ChatMessage, opts: { live?: boolean } = {}): void {
         <span class="author">${escapeHtml(msg.author)}</span>
         <span class="time">${fmtTime(msg.timestamp)}</span>
       </div>
-      <div class="text">${renderContent(escapeHtml(msg.content))}</div>
+      ${msg.content ? `<div class="text">${renderContent(escapeHtml(msg.content))}</div>` : ''}
     </div>
   `;
+  const bubble = div.querySelector('.bubble') as HTMLElement;
+  appendAttachments(bubble, msg);
+  for (const e of msg.embeds) bubble.appendChild(embedNode(e));
   messagesEl.appendChild(div);
   if (!opts.live) return;
   // автопрокрутка только если пользователь внизу чата
@@ -91,6 +195,23 @@ export function appendLiveMessage(msg: ChatMessage): void {
 export function initChatInput(): void {
   const messageInput = el<HTMLTextAreaElement>('messageInput');
   const messagesEl = el('messages');
+
+  // Ссылки и картинки — в системный браузер, а не в вебвью.
+  messagesEl.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    if (
+      target instanceof HTMLImageElement &&
+      (target.classList.contains('att-image') || target.classList.contains('embed-image'))
+    ) {
+      void api.openUrl(target.src).catch(() => {});
+      return;
+    }
+    const link = target.closest('a[href]') as HTMLAnchorElement | null;
+    if (link) {
+      e.preventDefault();
+      void api.openUrl(link.href).catch(() => {});
+    }
+  });
 
   messageInput.addEventListener('input', () => {
     messageInput.style.height = 'auto';

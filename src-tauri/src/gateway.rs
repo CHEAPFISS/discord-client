@@ -4,6 +4,7 @@ use tauri::{command, AppHandle, Emitter, Manager, State};
 use tokio_tungstenite::tungstenite::Message;
 
 use discord_client::{parse_presence, DiscordState, GatewaySender};
+use crate::api::parse_message;
 use crate::voice::connect::connect_voice;
 
 /// Защита от повторного запуска: только одно соединение за раз.
@@ -340,14 +341,7 @@ async fn gateway_once(
                     "MESSAGE_CREATE" => {
                         let d = &v["d"];
                         if d["type"].as_u64().unwrap_or(0) == 0 {
-                            let payload = json!({
-                                "id": d["id"],
-                                "channel_id": d["channel_id"],
-                                "author": d["author"]["username"],
-                                "content": d["content"],
-                                "timestamp": d["timestamp"],
-                            });
-                            let _ = app.emit("message_create", payload);
+                            let _ = app.emit("message_create", parse_message(d));
                         }
                     }
                     "VOICE_STATE_UPDATE" => {

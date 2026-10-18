@@ -1,16 +1,10 @@
 // Типизированные подписки на события бэкенда (app.emit в Rust).
 
 import { listen } from '@tauri-apps/api/event';
-import type { ActivityInfo } from './api';
+import type { ActivityInfo, ChatMessage } from './api';
 
-/** MESSAGE_CREATE из Gateway (текстовый канал). */
-export interface MessageCreatePayload {
-  id: string;
-  channel_id: string;
-  author: string;
-  content: string;
-  timestamp: string;
-}
+/** MESSAGE_CREATE из Gateway (текстовый канал): формат совпадает с историей REST. */
+export type MessageCreatePayload = ChatMessage;
 
 /** Состояние gateway-соединения. */
 export interface GatewayStatusPayload {
