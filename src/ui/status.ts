@@ -1,26 +1,23 @@
 // Верхняя строка состояния (gateway-соединение).
+// Цвета — целиком в CSS (main.css), здесь только состояние и текст.
 
 import { el } from '../dom';
 
 export function setGatewayStatus(status: string, error?: string): void {
-  const dot = el('statusDot');
+  const pill = el('appStatus');
   const text = el('statusText');
-  dot.className = 'status-dot';
   switch (status) {
     case 'connected':
     case 'ready':
-      dot.classList.add('connected');
+      pill.dataset.state = 'connected';
       text.textContent = 'Подключено к Discord';
-      text.style.color = '#dcddde';
       break;
     case 'reconnecting':
-      dot.classList.add('connecting');
+      pill.dataset.state = 'reconnecting';
       text.textContent = error ? `Переподключение… (${error})` : 'Переподключение…';
-      text.style.color = '#faa61a';
       break;
     default:
-      dot.classList.add('disconnected');
+      pill.dataset.state = 'disconnected';
       text.textContent = 'Нет соединения';
-      text.style.color = '#8e9297';
   }
 }

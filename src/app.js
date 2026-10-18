@@ -580,25 +580,21 @@ function initLogin() {
 
 // src/ui/status.ts
 function setGatewayStatus(status, error) {
-  const dot = el("statusDot");
+  const pill = el("appStatus");
   const text = el("statusText");
-  dot.className = "status-dot";
   switch (status) {
     case "connected":
     case "ready":
-      dot.classList.add("connected");
+      pill.dataset.state = "connected";
       text.textContent = "\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u043A Discord";
-      text.style.color = "#dcddde";
       break;
     case "reconnecting":
-      dot.classList.add("connecting");
+      pill.dataset.state = "reconnecting";
       text.textContent = error ? `\u041F\u0435\u0440\u0435\u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435\u2026 (${error})` : "\u041F\u0435\u0440\u0435\u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435\u2026";
-      text.style.color = "#faa61a";
       break;
     default:
-      dot.classList.add("disconnected");
+      pill.dataset.state = "disconnected";
       text.textContent = "\u041D\u0435\u0442 \u0441\u043E\u0435\u0434\u0438\u043D\u0435\u043D\u0438\u044F";
-      text.style.color = "#8e9297";
   }
 }
 
