@@ -50,7 +50,6 @@ pub(crate) fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
         stream: state.stream.clone(),
         stream_conn: state.stream_conn.clone(),
         playback_tx: state.playback_tx.clone(),
-        stream_audio_at: state.stream_audio_at.clone(),
     }
 }
 

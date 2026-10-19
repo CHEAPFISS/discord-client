@@ -276,10 +276,6 @@ pub struct DiscordState {
     /// Общий sender кадров в play_audio_task: голос и звук стрима играют через
     /// ОДИН mixer (второй аудио-прибор дал бы конфликт/двойной звук).
     pub playback_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<(u64, Vec<u8>, u8)>>>>,
-    /// Когда со стрим-коннекта последний раз шёл звук (для анти-дубля: голос
-    /// стримера в родительском канале отбрасываем, пока стрим его несёт).
-    /// Пустой стрим (демка без звука) — значение стареет и голос не глушим.
-    pub stream_audio_at: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 /// Цель подключения к голосовому каналу + собранные данные авторизации.
@@ -320,7 +316,6 @@ impl Default for DiscordState {
             stream: Arc::new(Mutex::new(None)),
             stream_conn: Arc::new(Mutex::new(VoiceSlot::default())),
             playback_tx: Arc::new(Mutex::new(None)),
-            stream_audio_at: Arc::new(Mutex::new(None)),
         }
     }
 }

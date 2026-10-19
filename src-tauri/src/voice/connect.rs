@@ -316,33 +316,6 @@ pub(crate) async fn connect_voice(
                     {
                         continue;
                     }
-                    // Анти-дубль при просмотре демки: голос стримера приходит и
-                    // здесь (родительский канал), и звуком из стрим-коннекта —
-                    // два кадра одного человека в одну per-user очередь микшера
-                    // дают удвоенный приток, кадры вперемешку и «дробление» его
-                    // звука. Пока стрим реально льёт аудио (<1.5 с назад) —
-                    // его родительские кадры отбрасываем. Демка без звука /
-                    // чужие участники — не затрагиваем.
-                    {
-                        let st = pump_app.state::<DiscordState>();
-                        let watched = st
-                            .stream
-                            .lock()
-                            .unwrap()
-                            .as_ref()
-                            .and_then(|t| t.owner_id.parse::<u64>().ok());
-                        if watched == Some(user_id) {
-                            let fresh = st
-                                .stream_audio_at
-                                .lock()
-                                .unwrap()
-                                .map(|at| at.elapsed().as_millis() < 1500)
-                                .unwrap_or(false);
-                            if fresh {
-                                continue;
-                            }
-                        }
-                    }
                     let _ = audio_tx.send((user_id, opus, missing as u8)).await;
                 }
                 oto::ConnectionEvent::DaveStateChanged { opcode, before, after, .. } => {

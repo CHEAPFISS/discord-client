@@ -193,12 +193,16 @@ async fn connect_stream_task(
                     {
                         continue;
                     }
-                    // Отметка «стрим льёт аудио» — родительский голос стримера
-                    // на это время отбрасывается (анти-дубль, см. connect.rs).
-                    *pump_state.stream_audio_at.lock().unwrap() = Some(std::time::Instant::now());
                     let tx = pump_state.playback_tx.lock().unwrap().clone();
                     if let Some(tx) = tx {
-                        let _ = tx.send((user_id, opus, missing as u8)).await;
+                        // ОТДЕЛЬНЫЙ слот микшера для звука демки: снежные id
+                        // Discord < 2^63 — ставим бит 63. Иначе звук демки и
+                        // голос стримера (родительский коннект) попадали бы в
+                        // ОДНУ per-user очередь и играли вперемешку по кадру
+                        // («дробление»). Теперь у каждого свой джиттер-буфер,
+                        // а микшер их суммирует.
+                        let mix_uid = user_id | (1u64 << 63);
+                        let _ = tx.send((mix_uid, opus, missing as u8)).await;
                     }
                 }
                 oto::ConnectionEvent::VideoStateReceived {
