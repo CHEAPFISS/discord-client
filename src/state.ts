@@ -41,4 +41,8 @@ export const state = {
   membersGuildId: null as string | null,
   /** Идёт загрузка участников (не перерисовываем промежуточно). */
   membersLoading: false,
+
+  // --- Чужая демонстрация экрана (focus-режим) ---
+  /** Что смотрим прямо сейчас: ключ стрима + владелец (null — ничего). */
+  watching: null as { stream_key: string; owner_id: string; username: string } | null,
 };

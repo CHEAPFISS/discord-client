@@ -6,6 +6,7 @@ import { api, type Member, type VoiceStateInfo } from '../api';
 import { el } from '../dom';
 import type { PresenceUpdatePayload, VoiceMemberUpdatePayload, VoiceSpeakingPayload } from '../events';
 import { state } from '../state';
+import { isWatchingUser, watchStream } from './stream';
 
 /** URL аватарки с CDN Discord (animated → .gif). */
 function avatarUrl(m: Member): string | null {
@@ -177,7 +178,7 @@ interface Group {
   members: Member[];
 }
 
-function renderMembers(): void {
+export function renderMembers(): void {
   const membersEl = el('members');
   membersEl.innerHTML = '';
   if (state.members.length === 0) {
@@ -277,7 +278,20 @@ function memberRow(m: Member): HTMLElement {
   if (streamLine) {
     const sub = document.createElement('div');
     sub.className = 'member-sub streaming';
-    sub.textContent = streamLine;
+    if (vs?.self_stream) {
+      // Демонстрацию можно посмотреть: клик — подключиться, повторный — отключиться.
+      const watching = isWatchingUser(m.user_id);
+      sub.textContent = watching ? '⏹ Смотрю демонстрацию' : streamLine;
+      sub.classList.add('clickable');
+      if (watching) sub.classList.add('watching');
+      sub.title = watching ? 'Перестать смотреть' : 'Смотреть демонстрацию';
+      sub.onclick = (e) => {
+        e.stopPropagation();
+        void watchStream(m.user_id, m.username, vs.channel_id);
+      };
+    } else {
+      sub.textContent = streamLine;
+    }
     body.appendChild(sub);
   }
   if (lines.length > 0) {

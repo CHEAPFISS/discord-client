@@ -58,6 +58,15 @@ export interface VoiceSpeakingPayload {
   speaking: boolean;
 }
 
+/** STREAM_UPDATE: состояние чужой демонстрации, которую мы смотрим.
+ *  watching=false приходит при завершении демки / отключении / обрыве. */
+export interface StreamUpdatePayload {
+  watching: boolean;
+  stream_key?: string;
+  owner_id?: string;
+  reason?: string;
+}
+
 function subscribe<T>(event: string, cb: (p: T) => void): void {
   listen<T>(event, (e) => cb(e.payload)).catch((err) => {
     console.warn(`listen(${event}):`, err);
@@ -84,3 +93,6 @@ export const onVoiceMemberUpdate = (cb: (p: VoiceMemberUpdatePayload) => void): 
 
 export const onVoiceSpeaking = (cb: (p: VoiceSpeakingPayload) => void): void =>
   subscribe('voice_speaking', cb);
+
+export const onStreamUpdate = (cb: (p: StreamUpdatePayload) => void): void =>
+  subscribe('stream_update', cb);

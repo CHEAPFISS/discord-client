@@ -143,6 +143,10 @@ var api = {
   // --- Голос ---
   joinVoice: (channelId, guildId) => invoke("join_voice_channel", { channelId, guildId }),
   leaveVoice: () => invoke("leave_voice_channel"),
+  /** Смотреть чужую демонстрацию: ключ `guild:{guild}:{channel}:{owner}` (op 20). */
+  watchStream: (streamKey) => invoke("watch_stream", { streamKey }),
+  /** Перестать смотреть демонстрацию (op 19 + отключение стрим-соединения). */
+  unwatchStream: () => invoke("unwatch_stream"),
   setSelfMute: (muted) => invoke("set_self_mute", { muted }),
   setSelfDeaf: (deaf) => invoke("set_self_deaf", { deaf })
 };
@@ -206,6 +210,7 @@ var onVoiceChannelReady = (cb) => subscribe("voice_channel_ready", cb);
 var onPresenceUpdate = (cb) => subscribe("presence_update", cb);
 var onVoiceMemberUpdate = (cb) => subscribe("voice_member_update", cb);
 var onVoiceSpeaking = (cb) => subscribe("voice_speaking", cb);
+var onStreamUpdate = (cb) => subscribe("stream_update", cb);
 
 // src/state.ts
 var state = {
@@ -245,7 +250,10 @@ var state = {
   /** Сервер, для которого сейчас загружены участники. */
   membersGuildId: null,
   /** Идёт загрузка участников (не перерисовываем промежуточно). */
-  membersLoading: false
+  membersLoading: false,
+  // --- Чужая демонстрация экрана (focus-режим) ---
+  /** Что смотрим прямо сейчас: ключ стрима + владелец (null — ничего). */
+  watching: null
 };
 
 // src/ui/toast.ts
@@ -602,6 +610,70 @@ function initChatInput() {
   });
 }
 
+// src/ui/stream.ts
+function isWatchingUser(userId) {
+  return state.watching?.owner_id === userId;
+}
+async function watchStream(ownerId, username, channelId) {
+  const guildId = state.currentGuildId;
+  if (!guildId) return;
+  if (isWatchingUser(ownerId)) {
+    await stopWatching();
+    return;
+  }
+  if (state.currentVoiceChannelId !== channelId) {
+    showError("\u0421\u043C\u043E\u0442\u0440\u0435\u0442\u044C \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E \u043C\u043E\u0436\u043D\u043E \u0442\u043E\u043B\u044C\u043A\u043E \u0438\u0437 \u0442\u043E\u0433\u043E \u0436\u0435 \u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u0433\u043E \u043A\u0430\u043D\u0430\u043B\u0430 \u2014 \u0441\u043D\u0430\u0447\u0430\u043B\u0430 \u0437\u0430\u0439\u0434\u0438 \u0432 \u043D\u0435\u0433\u043E");
+    return;
+  }
+  if (state.watching) await stopWatching();
+  const stream_key = `guild:${guildId}:${channelId}:${ownerId}`;
+  state.watching = { stream_key, owner_id: ownerId, username };
+  setStreamOwner(username);
+  setStreamStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C \u043A \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u0438\u2026");
+  el("streamScreen").classList.add("active");
+  try {
+    await api.watchStream(stream_key);
+  } catch (e) {
+    closeScreen();
+    showError("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u044C\u0441\u044F \u043A \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u0438: " + e);
+  }
+}
+async function stopWatching() {
+  if (!state.watching) return;
+  closeScreen();
+  try {
+    await api.unwatchStream();
+  } catch (e) {
+    showError(e);
+  }
+}
+function handleStreamUpdate(p) {
+  if (!state.watching) return;
+  if (p.stream_key && p.stream_key !== state.watching.stream_key) return;
+  if (!p.watching) {
+    closeScreen();
+    return;
+  }
+  setStreamStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u2014 \u0432\u0438\u0434\u0435\u043E \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043D\u0430 \u0441\u043B\u0435\u0434\u0443\u044E\u0449\u0435\u043C \u044D\u0442\u0430\u043F\u0435 (\u0434\u0435\u043A\u043E\u0434\u0435\u0440)");
+}
+function closeScreen() {
+  state.watching = null;
+  el("streamScreen").classList.remove("active");
+  renderMembers();
+}
+function setStreamOwner(name) {
+  el("streamOwner").textContent = name;
+}
+function setStreamStatus(text) {
+  el("streamStatus").textContent = text;
+}
+function initStreamScreen() {
+  el("streamStop").onclick = () => void stopWatching();
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && state.watching) void stopWatching();
+  });
+}
+
 // src/ui/members.ts
 function avatarUrl(m) {
   if (!m.avatar) return null;
@@ -818,7 +890,19 @@ function memberRow(m) {
   if (streamLine) {
     const sub = document.createElement("div");
     sub.className = "member-sub streaming";
-    sub.textContent = streamLine;
+    if (vs?.self_stream) {
+      const watching = isWatchingUser(m.user_id);
+      sub.textContent = watching ? "\u23F9 \u0421\u043C\u043E\u0442\u0440\u044E \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E" : streamLine;
+      sub.classList.add("clickable");
+      if (watching) sub.classList.add("watching");
+      sub.title = watching ? "\u041F\u0435\u0440\u0435\u0441\u0442\u0430\u0442\u044C \u0441\u043C\u043E\u0442\u0440\u0435\u0442\u044C" : "\u0421\u043C\u043E\u0442\u0440\u0435\u0442\u044C \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E";
+      sub.onclick = (e) => {
+        e.stopPropagation();
+        void watchStream(m.user_id, m.username, vs.channel_id);
+      };
+    } else {
+      sub.textContent = streamLine;
+    }
     body.appendChild(sub);
   }
   if (lines.length > 0) {
@@ -1168,11 +1252,13 @@ onVoiceChannelReady(() => {
 onPresenceUpdate((p) => handlePresenceUpdate(p));
 onVoiceMemberUpdate((p) => handleVoiceMemberUpdate(p));
 onVoiceSpeaking((p) => handleVoiceSpeaking(p));
+onStreamUpdate((p) => handleStreamUpdate(p));
 void api.getGatewayStatus().then((p) => setGatewayStatus(p.status, p.error ?? void 0)).catch(() => {
 });
 initLogin();
 initChatInput();
 initVoiceControls();
+initStreamScreen();
 el("logoutBtn").onclick = async () => {
   try {
     await api.logout();

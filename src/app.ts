@@ -13,6 +13,7 @@ import {
   onGatewayStatus,
   onMessageCreate,
   onPresenceUpdate,
+  onStreamUpdate,
   onVoiceChannelReady,
   onVoiceMemberUpdate,
   onVoiceSpeaking,
@@ -21,6 +22,7 @@ import {
 import { initLogin, tryRestoreSession } from './login';
 import { appendLiveMessage, initChatInput } from './ui/chat';
 import { handlePresenceUpdate, handleVoiceMemberUpdate, handleVoiceSpeaking } from './ui/members';
+import { handleStreamUpdate, initStreamScreen } from './ui/stream';
 import { setGatewayStatus } from './ui/status';
 import { handleVoiceStatus, initVoiceControls, setVoiceStatus } from './ui/voice';
 
@@ -34,6 +36,7 @@ onVoiceChannelReady(() => {
 onPresenceUpdate((p) => handlePresenceUpdate(p));
 onVoiceMemberUpdate((p) => handleVoiceMemberUpdate(p));
 onVoiceSpeaking((p) => handleVoiceSpeaking(p));
+onStreamUpdate((p) => handleStreamUpdate(p));
 
 // После полной перезагрузки страницы события gateway_status уже не придут —
 // спрашиваем текущее состояние у бэкенда (Issue 1).
@@ -46,6 +49,7 @@ void api
 initLogin();
 initChatInput();
 initVoiceControls();
+initStreamScreen();
 
 el('logoutBtn').onclick = async () => {
   try {

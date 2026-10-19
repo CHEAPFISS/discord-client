@@ -63,6 +63,22 @@
 
     <div class="members" id="members"></div>
 
+    <!-- Экран чужой демонстрации: накрывает чат и колонку участников -->
+    <div class="stream-screen" id="streamScreen">
+      <div class="stream-stage">
+        <div class="stream-placeholder">
+          <div class="stream-big-icon">🖥</div>
+          <div class="stream-status" id="streamStatus">Подключаюсь к демонстрации…</div>
+          <div class="stream-hint">Звук демонстрации уже играет. Картинку подключим на следующем этапе (декодер видео).</div>
+        </div>
+      </div>
+      <div class="stream-bar">
+        <span class="stream-live">●</span>
+        <span class="stream-owner" id="streamOwner">…</span>
+        <button class="stream-stop" id="streamStop">Перестать смотреть</button>
+      </div>
+    </div>
+
     <div class="voice-call" id="voiceCall">
       <h3 id="voiceChannelName">Голосовой канал</h3>
       <div class="voice-status" id="voiceStatus"></div>

@@ -157,6 +157,10 @@ export const api = {
   joinVoice: (channelId: string, guildId: string) =>
     invoke<void>('join_voice_channel', { channelId, guildId }),
   leaveVoice: () => invoke<void>('leave_voice_channel'),
+  /** Смотреть чужую демонстрацию: ключ `guild:{guild}:{channel}:{owner}` (op 20). */
+  watchStream: (streamKey: string) => invoke<void>('watch_stream', { streamKey }),
+  /** Перестать смотреть демонстрацию (op 19 + отключение стрим-соединения). */
+  unwatchStream: () => invoke<void>('unwatch_stream'),
   setSelfMute: (muted: boolean) => invoke<void>('set_self_mute', { muted }),
   setSelfDeaf: (deaf: boolean) => invoke<void>('set_self_deaf', { deaf }),
 };
