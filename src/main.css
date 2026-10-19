@@ -363,11 +363,21 @@ summary:focus-visible {
 
 /* Демонстрация экрана/камеры — подсвечиваем бирюзовым (акцент). */
 .member-sub.streaming { color: var(--accent); }
-/* Строка-переключатель: клик — смотреть демонстрацию / перестать. */
-.member-sub.streaming.clickable { cursor: pointer; }
-.member-sub.streaming.clickable:hover { color: var(--accent-light); text-decoration: underline; }
-.member-sub.streaming.clickable:hover::after { content: ' ▶'; }
-.member-sub.streaming.watching { color: var(--accent-light); }
+
+/* Красный тайтл «В ЭФИРЕ» у стримера в мини-списке голосового канала
+   (вход в демку — двойной клик по строке). */
+.live-badge {
+  margin-left: auto;
+  flex: none;
+  background: var(--danger);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: var(--radius-s);
+}
 
 /* --- Input --- */
 .input-area { padding: 0 20px 20px; }

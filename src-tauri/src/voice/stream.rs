@@ -193,6 +193,9 @@ async fn connect_stream_task(
                     {
                         continue;
                     }
+                    // Отметка «стрим льёт аудио» — родительский голос стримера
+                    // на это время отбрасывается (анти-дубль, см. connect.rs).
+                    *pump_state.stream_audio_at.lock().unwrap() = Some(std::time::Instant::now());
                     let tx = pump_state.playback_tx.lock().unwrap().clone();
                     if let Some(tx) = tx {
                         let _ = tx.send((user_id, opus, missing as u8)).await;

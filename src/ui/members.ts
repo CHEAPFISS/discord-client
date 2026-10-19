@@ -6,7 +6,7 @@ import { api, type Member, type VoiceStateInfo } from '../api';
 import { el } from '../dom';
 import type { PresenceUpdatePayload, VoiceMemberUpdatePayload, VoiceSpeakingPayload } from '../events';
 import { state } from '../state';
-import { isWatchingUser, watchStream } from './stream';
+import { watchStream } from './stream';
 
 /** URL аватарки с CDN Discord (animated → .gif). */
 function avatarUrl(m: Member): string | null {
@@ -278,20 +278,7 @@ function memberRow(m: Member): HTMLElement {
   if (streamLine) {
     const sub = document.createElement('div');
     sub.className = 'member-sub streaming';
-    if (vs?.self_stream) {
-      // Демонстрацию можно посмотреть: клик — подключиться, повторный — отключиться.
-      const watching = isWatchingUser(m.user_id);
-      sub.textContent = watching ? '⏹ Смотрю демонстрацию' : streamLine;
-      sub.classList.add('clickable');
-      if (watching) sub.classList.add('watching');
-      sub.title = watching ? 'Перестать смотреть' : 'Смотреть демонстрацию';
-      sub.onclick = (e) => {
-        e.stopPropagation();
-        void watchStream(m.user_id, m.username, vs.channel_id);
-      };
-    } else {
-      sub.textContent = streamLine;
-    }
+    sub.textContent = streamLine;
     body.appendChild(sub);
   }
   if (lines.length > 0) {
@@ -364,5 +351,20 @@ function voiceMemberRow(m: Member): HTMLElement {
 
   row.appendChild(av);
   row.appendChild(name);
+
+  // Красный тайтл «В ЭФИРЕ» + вход по дабл-клику (как в официальном клиенте).
+  const vs = state.memberVoice.get(m.user_id);
+  if (vs?.self_stream) {
+    const live = document.createElement('span');
+    live.className = 'live-badge';
+    live.textContent = 'В ЭФИРЕ';
+    live.title = 'Демонстрация — двойной клик, чтобы смотреть';
+    row.appendChild(live);
+    row.title = 'Двойной клик — смотреть демонстрацию';
+    row.ondblclick = (e) => {
+      e.stopPropagation();
+      void watchStream(m.user_id, m.username, vs.channel_id);
+    };
+  }
   return row;
 }

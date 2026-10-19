@@ -890,19 +890,7 @@ function memberRow(m) {
   if (streamLine) {
     const sub = document.createElement("div");
     sub.className = "member-sub streaming";
-    if (vs?.self_stream) {
-      const watching = isWatchingUser(m.user_id);
-      sub.textContent = watching ? "\u23F9 \u0421\u043C\u043E\u0442\u0440\u044E \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E" : streamLine;
-      sub.classList.add("clickable");
-      if (watching) sub.classList.add("watching");
-      sub.title = watching ? "\u041F\u0435\u0440\u0435\u0441\u0442\u0430\u0442\u044C \u0441\u043C\u043E\u0442\u0440\u0435\u0442\u044C" : "\u0421\u043C\u043E\u0442\u0440\u0435\u0442\u044C \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E";
-      sub.onclick = (e) => {
-        e.stopPropagation();
-        void watchStream(m.user_id, m.username, vs.channel_id);
-      };
-    } else {
-      sub.textContent = streamLine;
-    }
+    sub.textContent = streamLine;
     body.appendChild(sub);
   }
   if (lines.length > 0) {
@@ -963,6 +951,19 @@ function voiceMemberRow(m) {
   name.textContent = m.username;
   row.appendChild(av);
   row.appendChild(name);
+  const vs = state.memberVoice.get(m.user_id);
+  if (vs?.self_stream) {
+    const live = document.createElement("span");
+    live.className = "live-badge";
+    live.textContent = "\u0412 \u042D\u0424\u0418\u0420\u0415";
+    live.title = "\u0414\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044F \u2014 \u0434\u0432\u043E\u0439\u043D\u043E\u0439 \u043A\u043B\u0438\u043A, \u0447\u0442\u043E\u0431\u044B \u0441\u043C\u043E\u0442\u0440\u0435\u0442\u044C";
+    row.appendChild(live);
+    row.title = "\u0414\u0432\u043E\u0439\u043D\u043E\u0439 \u043A\u043B\u0438\u043A \u2014 \u0441\u043C\u043E\u0442\u0440\u0435\u0442\u044C \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E";
+    row.ondblclick = (e) => {
+      e.stopPropagation();
+      void watchStream(m.user_id, m.username, vs.channel_id);
+    };
+  }
   return row;
 }
 
