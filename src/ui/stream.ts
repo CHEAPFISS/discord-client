@@ -3,12 +3,90 @@
 // Сам видео-поток рисуем на этапе декодера (Фаза 3); сейчас экран показывает
 // статус подключения, а звук демки уже идёт через общий mixer.
 
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { api } from '../api';
 import { el } from '../dom';
 import type { StreamUpdatePayload } from '../events';
 import { state } from '../state';
 import { renderMembers } from './members';
 import { showError } from './toast';
+
+// Рендер видео: пока canvas не получил ни одного кадра — он скрыт и виден
+// плейсхолдер со статусом. Первый кадр показывает canvas и прячет плейсхолдер.
+let videoCtx: CanvasRenderingContext2D | null = null;
+/** Защита от «наезда» кадров: createImageBitmap асинхронен, если предыдущий
+ *  кадр ещё декодируется — текущий отбрасывается (на экране всегда свежий). */
+let videoFrameInFlight = false;
+/** Размер последнего кадра — для вписывания canvas в сцену при resize окна. */
+let videoFrameSize: { w: number; h: number } | null = null;
+
+/** Вписывает canvas в сцену с сохранением пропорций КАДРА: элемент заполняет
+ *  максимум доступного места. Без этого canvas жил в «натуральную» величину
+ *  (1280×720 CSS-пикселей): на большом окне выглядел маленьким с огромными
+ *  чёрными полями, а при низком стартовом разрешении стрима «рос» с каждым
+ *  повышением разрешения — вместо того чтобы сразу занять сцену. */
+function fitCanvasToStage(): void {
+  const canvas = el<HTMLCanvasElement>('streamCanvas');
+  const stage = el('streamScreen').querySelector<HTMLElement>('.stream-stage');
+  if (!stage || !videoFrameSize) return;
+  const sw = stage.clientWidth;
+  const sh = stage.clientHeight;
+  if (sw <= 0 || sh <= 0) return;
+  const scale = Math.min(sw / videoFrameSize.w, sh / videoFrameSize.h);
+  canvas.style.width = `${Math.floor(videoFrameSize.w * scale)}px`;
+  canvas.style.height = `${Math.floor(videoFrameSize.h * scale)}px`;
+}
+window.addEventListener('resize', fitCanvasToStage);
+
+/** Создаём бинарный канал кадров и отдаём бэкенду (stream_video_attach).
+ *  Бэкенд шлёт ArrayBuffer: [u32 width LE][u32 height LE][jpeg…] — JPEG
+ *  (~250 КБ на кадр 1080p вместо 8.3 МБ сырых RGBA), декодер асинхронный. */
+function attachVideoChannel(): void {
+  const channel = new Channel<ArrayBuffer>();
+  channel.onmessage = (buf) => {
+    const view = new DataView(buf);
+    const width = view.getUint32(0, true);
+    const height = view.getUint32(4, true);
+    drawJpegFrame(width, height, buf.slice(8));
+  };
+  invoke('stream_video_attach', { channel }).catch((e) => {
+    console.warn('stream_video_attach:', e);
+  });
+}
+
+/** Кадр-JPEG из бинарного канала: createImageBitmap → canvas. Декодирование
+ *  JPEG вынесено воркером WebKit (не блокирует UI-поток). */
+async function drawJpegFrame(width: number, height: number, jpeg: ArrayBuffer): Promise<void> {
+  if (!state.watching) return; // не смотрим — кадры бэкенд-остатки, игнор
+  if (videoFrameInFlight) return; // предыдущий кадр ещё декодируется — берём свежий позже
+  videoFrameInFlight = true;
+  try {
+    const bitmap = await createImageBitmap(new Blob([jpeg], { type: 'image/jpeg' }));
+    const canvas = el<HTMLCanvasElement>('streamCanvas');
+    const stage = el('streamScreen').querySelector('.stream-stage');
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+      videoCtx = null; // размер сменился — контекст пересоздаём
+      videoFrameSize = { w: width, h: height };
+      fitCanvasToStage();
+    }
+    if (!videoCtx) videoCtx = canvas.getContext('2d');
+    if (!videoCtx) return;
+    videoCtx.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    // Показываем видео, убирая плейсхолдер (только при первом кадре).
+    if (canvas.hidden) {
+      canvas.hidden = false;
+      stage?.classList.add('has-video');
+      fitCanvasToStage(); // сцена уже видима — вписываем кадр в неё
+    }
+  } catch {
+    // Битый/устаревший кадр — молча пропускаем.
+  } finally {
+    videoFrameInFlight = false;
+  }
+}
 
 /** Смотрим ли демонстрацию конкретного участника (строка-переключатель). */
 export function isWatchingUser(userId: string): boolean {
@@ -40,6 +118,7 @@ export async function watchStream(
   setStreamOwner(username);
   setStreamStatus('Подключаюсь к демонстрации…');
   el('streamScreen').classList.add('active');
+  attachVideoChannel(); // бинарный канал кадров — бэкенд начнёт слать пиксели
   try {
     await api.watchStream(stream_key);
   } catch (e) {
@@ -68,12 +147,17 @@ export function handleStreamUpdate(p: StreamUpdatePayload): void {
     closeScreen();
     return;
   }
-  setStreamStatus('Подключено — видео появится на следующем этапе (декодер)');
+  setStreamStatus('Подключено — показываю демонстрацию');
 }
 
 function closeScreen(): void {
   state.watching = null;
   el('streamScreen').classList.remove('active');
+  // Сбрасываем видео: прячем canvas и возвращаем плейсхолдер для следующего стрима.
+  const canvas = el<HTMLCanvasElement>('streamCanvas');
+  canvas.hidden = true;
+  videoCtx = null;
+  el('streamScreen').querySelector('.stream-stage')?.classList.remove('has-video');
   renderMembers(); // вернуть в колонке строку «Смотреть демонстрацию»
 }
 

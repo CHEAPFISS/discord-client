@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager};
 
 use discord_client::{DiscordState, StreamTarget};
+use crate::video_render;
 
 /// RTC-подключение к стриму (Go Live), который мы смотрим.
 ///
@@ -157,10 +158,60 @@ async fn connect_stream_task(
         json!({"watching": true, "stream_key": target.stream_key, "owner_id": target.owner_id}),
     );
 
+    // Очередь кадров + отдельный декодер-таск (Фаза 3): декодирование H264
+    // блокирующее/CPU-bound, поэтому его выносим из насоса oto, чтобы не
+    // подзадерживать звук и фазы. Насос кладёт кадры в очередь, таск
+    // декодирует и шлёт RGBA-пиксели фронту бинарным каналом.
+    // Остановщик: замена sender'а дропает прошлого — старый decode-таск выходит
+    // по stop-сигналу (иначе тек на каждый реконнект, п.6 ревью).
+    let video_queue = video_render::new_frame_queue();
+    let (video_stop_tx, video_stop_rx) = tokio::sync::watch::channel(false);
+    *state.stream_video_stop.lock().unwrap() = Some(video_stop_tx);
+    // Запросы ключевого кадра (RTCP PLI): декодер сигналит при ошибках, задача
+    // ниже отправляет запрос в SFU. Видео-SSRC стримера приходит в op12 Video.
+    let (keyframe_tx, mut keyframe_rx) = tokio::sync::mpsc::channel::<()>(4);
+    let video_ssrc = std::sync::Arc::new(std::sync::Mutex::new(None::<u32>));
+    {
+        let pli_conn = conn.clone();
+        let pli_ssrc = video_ssrc.clone();
+        let mut pli_stop = video_stop_rx.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    changed = pli_stop.changed() => {
+                        if changed.is_err() || *pli_stop.borrow() {
+                            break;
+                        }
+                    }
+                    request = keyframe_rx.recv() => {
+                        if request.is_none() {
+                            break;
+                        }
+                        let ssrc = *pli_ssrc.lock().unwrap();
+                        let Some(ssrc) = ssrc else { continue };
+                        match pli_conn.request_keyframe(ssrc).await {
+                            Ok(()) => log::debug!("Stream video: PLI отправлен (ssrc={ssrc})"),
+                            Err(e) => log::debug!("Stream video: PLI не отправлен: {e}"),
+                        }
+                    }
+                }
+            }
+        });
+    }
+    tauri::async_runtime::spawn(video_render::decode_and_draw_task(
+        video_queue.clone(),
+        state.stream_video_channel.clone(),
+        video_stop_rx,
+        keyframe_tx.clone(),
+    ));
+
     // Насос событий стрима: фазы логируем, звук демки — в общий mixer.
     let pump_app = app.clone();
     let pump_state: DiscordState = (*state).clone();
     let stream_key = target.stream_key.clone();
+    let pump_video_queue = video_queue.clone();
+    let pump_video_ssrc = video_ssrc.clone();
+    let pump_keyframe_tx = keyframe_tx.clone();
     let mut sub = conn
         .subscribe_events()
         .map_err(|e| format!("oto subscribe: {e}"))?;
@@ -215,6 +266,26 @@ async fn connect_stream_task(
                     log::info!(
                         "Stream (oto) Video state: user={user_id} audio_ssrc={audio_ssrc} video_ssrc={video_ssrc} rtx_ssrc={rtx_ssrc}"
                     );
+                    // Свежий просмотр всегда стартует в середине GOP — сразу
+                    // просим ключевой кадр, не дожидаясь ошибки декодера.
+                    *pump_video_ssrc.lock().unwrap() = Some(video_ssrc);
+                    let _ = pump_keyframe_tx.try_send(());
+                }
+                oto::ConnectionEvent::VideoFrameReceived { user_id, ssrc, timestamp, frame } => {
+                    // ФАЗА 3: Annex-B H264-кадр из депакетизатора. Кладём в
+                    // очередь декодер-таска (не декодируем тут — чтоб не тормозить
+                    // насос). Фронт рисует готовые пиксели из stream_video_draw.
+                    let _ = user_id;
+                    let _ = timestamp;
+                    // Опора, если op12 Video не пришёл: SSRC кадра и есть
+                    // видео-SSRC стримера (для RTCP PLI).
+                    {
+                        let mut slot = pump_video_ssrc.lock().unwrap();
+                        if slot.is_none() {
+                            *slot = Some(ssrc);
+                        }
+                    }
+                    video_render::push_frame(&pump_video_queue, frame);
                 }
                 oto::ConnectionEvent::DaveStateChanged { opcode, before, after, .. } => {
                     log::debug!("Stream (oto) DAVE control {opcode}: {before:?} → {after:?}");
@@ -238,12 +309,22 @@ async fn connect_stream_task(
         }
         log::info!("Stream (oto) насос завершён: {stream_key}");
         // Слот чистим только если он всё ещё про этот стрим (мог прийти новый).
-        let mut slot = pump_state.stream_conn.lock().unwrap();
-        if slot.session_id.as_deref() == Some(stream_key.as_str()) {
-            slot.conn = None;
-            slot.session_id = None;
-            slot.token = None;
-            slot.pump_spawned = false;
+        let ours = {
+            let mut slot = pump_state.stream_conn.lock().unwrap();
+            if slot.session_id.as_deref() == Some(stream_key.as_str()) {
+                slot.conn = None;
+                slot.session_id = None;
+                slot.token = None;
+                slot.pump_spawned = false;
+                true
+            } else {
+                false
+            }
+        };
+        // Насос кончился — гасим и decode-таск видео (если слот всё ещё наш:
+        // у нового стрима свой таск и свой стоп-сигнал).
+        if ours {
+            *pump_state.stream_video_stop.lock().unwrap() = None;
         }
         let _ = pump_app.emit("stream_update", json!({"watching": false, "stream_key": stream_key}));
     });
@@ -267,4 +348,20 @@ pub(crate) async fn disconnect_stream(app: &AppHandle) {
         slot.token = None;
         slot.pump_spawned = false;
     }
+    // Стрима нет — decode-таск видео тоже завершаем (дроп sender'а = стоп).
+    *state.stream_video_stop.lock().unwrap() = None;
+}
+
+/// Фронт открыл оверлей демки: принимаем бинарный канал для видео-кадров.
+/// Кадр: [u32 width LE][u32 height LE][rgba…] → ArrayBuffer на фронте
+/// (вместо JSON-массива чисел ~15-20 МБ на кадр — фриз UI).
+#[tauri::command]
+pub(crate) async fn stream_video_attach(
+    app: AppHandle,
+    channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+) -> Result<(), String> {
+    let state: tauri::State<'_, DiscordState> = app.state();
+    *state.stream_video_channel.lock().unwrap() = Some(channel);
+    log::info!("Stream video: канал кадров подключён фронтом");
+    Ok(())
 }

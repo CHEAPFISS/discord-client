@@ -9,6 +9,8 @@ mod gateway;
 mod members;
 mod voice;
 mod audio;
+mod video;
+mod video_render;
 
 fn main() {
     // Дефолт-фильтр: info + глушим крипто/WS-крейсы. RUST_LOG=debug/trace перекрывает.
@@ -52,6 +54,7 @@ fn main() {
             voice::set_self_deaf,
             voice::watch_stream,
             voice::unwatch_stream,
+            voice::stream::stream_video_attach,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

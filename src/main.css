@@ -720,6 +720,18 @@ textarea::placeholder { color: var(--text-low); }
   padding: 0 24px;
 }
 .stream-big-icon { font-size: 54px; opacity: 0.85; }
+/* Видеокадр: точный размер под сцену выставляет JS (fitCanvasToStage) с
+   сохранением пропорций кадра; здесь — безопасный фолбэк до первого кадра. */
+.stream-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  background: #000;
+}
+/* Плейсхолдер убираем из потока, когда canvas показан — иначе они
+   конкурируют за центрирование в flex-сцене. */
+.stream-stage.has-video .stream-placeholder { display: none; }
 .stream-status { font-size: 15px; color: var(--text-high); }
 .stream-hint { font-size: 12px; color: var(--text-low); max-width: 440px; line-height: 1.5; }
 .stream-bar {

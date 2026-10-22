@@ -611,6 +611,62 @@ function initChatInput() {
 }
 
 // src/ui/stream.ts
+var videoCtx = null;
+var videoFrameInFlight = false;
+var videoFrameSize = null;
+function fitCanvasToStage() {
+  const canvas = el("streamCanvas");
+  const stage = el("streamScreen").querySelector(".stream-stage");
+  if (!stage || !videoFrameSize) return;
+  const sw = stage.clientWidth;
+  const sh = stage.clientHeight;
+  if (sw <= 0 || sh <= 0) return;
+  const scale = Math.min(sw / videoFrameSize.w, sh / videoFrameSize.h);
+  canvas.style.width = `${Math.floor(videoFrameSize.w * scale)}px`;
+  canvas.style.height = `${Math.floor(videoFrameSize.h * scale)}px`;
+}
+window.addEventListener("resize", fitCanvasToStage);
+function attachVideoChannel() {
+  const channel = new Channel();
+  channel.onmessage = (buf) => {
+    const view = new DataView(buf);
+    const width = view.getUint32(0, true);
+    const height = view.getUint32(4, true);
+    drawJpegFrame(width, height, buf.slice(8));
+  };
+  invoke("stream_video_attach", { channel }).catch((e) => {
+    console.warn("stream_video_attach:", e);
+  });
+}
+async function drawJpegFrame(width, height, jpeg) {
+  if (!state.watching) return;
+  if (videoFrameInFlight) return;
+  videoFrameInFlight = true;
+  try {
+    const bitmap = await createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }));
+    const canvas = el("streamCanvas");
+    const stage = el("streamScreen").querySelector(".stream-stage");
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+      videoCtx = null;
+      videoFrameSize = { w: width, h: height };
+      fitCanvasToStage();
+    }
+    if (!videoCtx) videoCtx = canvas.getContext("2d");
+    if (!videoCtx) return;
+    videoCtx.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    if (canvas.hidden) {
+      canvas.hidden = false;
+      stage?.classList.add("has-video");
+      fitCanvasToStage();
+    }
+  } catch {
+  } finally {
+    videoFrameInFlight = false;
+  }
+}
 function isWatchingUser(userId) {
   return state.watching?.owner_id === userId;
 }
@@ -631,6 +687,7 @@ async function watchStream(ownerId, username, channelId) {
   setStreamOwner(username);
   setStreamStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C \u043A \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u0438\u2026");
   el("streamScreen").classList.add("active");
+  attachVideoChannel();
   try {
     await api.watchStream(stream_key);
   } catch (e) {
@@ -654,11 +711,15 @@ function handleStreamUpdate(p) {
     closeScreen();
     return;
   }
-  setStreamStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u2014 \u0432\u0438\u0434\u0435\u043E \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043D\u0430 \u0441\u043B\u0435\u0434\u0443\u044E\u0449\u0435\u043C \u044D\u0442\u0430\u043F\u0435 (\u0434\u0435\u043A\u043E\u0434\u0435\u0440)");
+  setStreamStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u2014 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u044E \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E");
 }
 function closeScreen() {
   state.watching = null;
   el("streamScreen").classList.remove("active");
+  const canvas = el("streamCanvas");
+  canvas.hidden = true;
+  videoCtx = null;
+  el("streamScreen").querySelector(".stream-stage")?.classList.remove("has-video");
   renderMembers();
 }
 function setStreamOwner(name) {

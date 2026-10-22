@@ -273,6 +273,15 @@ pub struct DiscordState {
     pub stream: Arc<Mutex<Option<StreamTarget>>>,
     /// Хендл RTC-соединения стрима (второй коннект параллельно с голосовым).
     pub stream_conn: Arc<Mutex<VoiceSlot>>,
+    /// Бинарный канал кадров видео (Tauri Channel<InvokeResponseBody>): фронт
+    /// создаёт его при открытии оверлея демки (команда stream_video_attach).
+    /// Кадр: [u32 width LE][u32 height LE][rgba…] — без JSON-оверхеда (~15 МБ/кадр).
+    pub stream_video_channel:
+        Arc<Mutex<Option<tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>>>>,
+    /// Остановщик decode-таска видео: дроп sender'а (None) завершает таск.
+    /// Меняется при реконнекте/дисконнекте стрима — иначе таск с декодером
+    /// тек на каждую сессию (п.6 ревью).
+    pub stream_video_stop: Arc<Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
     /// Общий sender кадров в play_audio_task: голос и звук стрима играют через
     /// ОДИН mixer (второй аудио-прибор дал бы конфликт/двойной звук).
     pub playback_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<(u64, Vec<u8>, u8)>>>>,
@@ -315,6 +324,8 @@ impl Default for DiscordState {
             member_fetch: Arc::new(MemberFetchHub::default()),
             stream: Arc::new(Mutex::new(None)),
             stream_conn: Arc::new(Mutex::new(VoiceSlot::default())),
+            stream_video_channel: Arc::new(Mutex::new(None)),
+            stream_video_stop: Arc::new(Mutex::new(None)),
             playback_tx: Arc::new(Mutex::new(None)),
         }
     }

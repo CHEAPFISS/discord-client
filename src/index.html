@@ -66,7 +66,10 @@
     <!-- Экран чужой демонстрации: накрывает чат и колонку участников -->
     <div class="stream-screen" id="streamScreen">
       <div class="stream-stage">
-        <div class="stream-placeholder">
+        <!-- Видеокадр декодера (RGBA) рисуется сюда. Пока не пришёл первый
+             кадр — скрыт, виден плейсхолдер со статусом подключения. -->
+        <canvas id="streamCanvas" class="stream-canvas" hidden></canvas>
+        <div class="stream-placeholder" id="streamPlaceholder">
           <div class="stream-big-icon">🖥</div>
           <div class="stream-status" id="streamStatus">Подключаюсь к демонстрации…</div>
           <div class="stream-hint">Звук демонстрации уже играет. Картинку подключим на следующем этапе (декодер видео).</div>

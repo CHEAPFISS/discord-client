@@ -27,11 +27,27 @@ cpal = "0.15"
 # Форк (v1.0.0 + диагностика DAVE/приём аудио) вендорен локально: ../vendor/oto
 oto = { path = "../vendor/oto/crates/oto" }
 
+# Декодер H264 для просмотра демок (Фаза 3). Используем СИСТЕМНУЮ
+# libopenh264 (пакет Arch, собран с ассемблером) через динамическую загрузку:
+# встроенная сборка из исходников без nasm/yasm собиралась без ассемблера и в
+# debug-профиле декодировала 1080p 60–120 мс на кадр — очередь кадров рвалась
+# («одна картинка и стоп»). `source` отключаем, включаем `libloading`.
+openh264 = { version = "0.9", default-features = false, features = ["libloading"] }
+# JPEG-кодирование кадров демки перед IPC в webview: системная libturbojpeg
+# (pkg-config, собрана с SIMD) — без cmake-сборки из исходников.
+turbojpeg = { version = "1.5.1", default-features = false, features = ["pkg-config"] }
+fast_image_resize = "6.1.0"
+
 # Нативная WebRTC библиотека — подключим после выбора конкретной реализации
 #пример: webrtc = { version = "0.9", features = ["audio", "video"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+# Наш код в debug собирается с -O1: горячий путь видео (копия 8 МБ RGBA-кадра
+# каждый кадр) на -O0 отнимал заметные миллисекунды; отладка при этом остаётся.
+[profile.dev]
+opt-level = 1
 
 [profile.release]
 opt-level = 3
@@ -42,7 +58,22 @@ codegen-units = 1
 # контракт poll (≤2 мс на кадр) — oto считает это сбоем и роняет отправку.
 [profile.dev.package.nnnoiseless]
 opt-level = 3
+# fast_image_resize (даунскейл YUV в горячем пути видео): SIMD-свёртка на
+# -O2 давала ~14 мс на кадр — на -O3 быстрее.
+[profile.dev.package.fast_image_resize]
+opt-level = 3
+# cargo test работает в профиль test — продублируем override, иначе бенч
+# daunskayla меряется на -O2/-O1 и врёт (Box: 15 мс вместо ~4).
+[profile.test.package.fast_image_resize]
+opt-level = 3
 # Оптимизировать все зависимости (libopus, ring, …): unoptimized libopus тоже
 # периодически вылезал за 2 мс CPU на кадр → FrameSourceContract каждый ~3 мин.
 [profile.dev.package."*"]
 opt-level = 2
+
+# C-код openh264 компилируется build-скриптом (cc) и по умолчанию собирается
+# вообще без оптимизации: 1080p в debug декодировался 67–127 мс на кадр —
+# 30 fps недостижимы, очередь кадров рвалась. build-override задаёт opt-level
+# для компиляции внутри build-скриптов (и их C-исходников).
+[profile.dev.build-override]
+opt-level = 3

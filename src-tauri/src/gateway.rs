@@ -49,6 +49,8 @@ pub(crate) fn clone_state(state: &State<'_, DiscordState>) -> DiscordState {
         member_fetch: state.member_fetch.clone(),
         stream: state.stream.clone(),
         stream_conn: state.stream_conn.clone(),
+        stream_video_channel: state.stream_video_channel.clone(),
+        stream_video_stop: state.stream_video_stop.clone(),
         playback_tx: state.playback_tx.clone(),
     }
 }
