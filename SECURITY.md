@@ -12,21 +12,27 @@ on the `master` branch; only the latest commit is supported.
 
 ## Reporting a vulnerability
 
-**Please do not open a public issue for a security problem.**
+**Please do not open a public issue with technical details.**
 
-Use GitHub's private vulnerability reporting:
+This repository is private, and GitHub's private vulnerability reporting may not
+be available on the current plan. Use one of these routes:
 
-1. Open the repository on GitHub.
-2. Go to **Security** → **Advisories** → **Report a vulnerability**.
-3. Include:
+1. If **Security** → **Advisories** → **Report a vulnerability** is available,
+   use it.
+2. Otherwise, contact the maintainer [@CHEAPFISS](https://github.com/CHEAPFISS)
+   to arrange a private channel. You may open an issue titled
+   “Security contact request” **without technical details** so the maintainer
+   can respond.
+
+Include:
    - affected commit/version;
    - a description of the issue and its impact;
    - reproduction steps or a proof of concept;
    - your distro/session (Wayland/X11) and relevant logs with secrets redacted;
    - whether you want to be credited.
 
-If private reporting is unavailable, open a minimal issue asking the maintainer
-for a private channel — **without** technical details or secrets.
+If private reporting is unavailable, contact the maintainer to arrange a
+private channel — **without** technical details or secrets.
 
 This is a volunteer project. There is no bug bounty and no guaranteed response
 time, but reports will be acknowledged as soon as possible.

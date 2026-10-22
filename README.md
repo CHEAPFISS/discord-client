@@ -219,7 +219,8 @@ type-check, i18n parity, bundle freshness, `cargo test`).
 ## Security
 
 Please do **not** paste tokens, session files or full logs into issues. Report
-vulnerabilities via GitHub Security Advisories; see [SECURITY.md](SECURITY.md).
+vulnerabilities privately — see [SECURITY.md](SECURITY.md) for the available
+routes.
 
 ## License
 

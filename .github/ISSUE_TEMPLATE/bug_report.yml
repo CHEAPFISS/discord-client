@@ -9,8 +9,8 @@ body:
         Thanks for reporting a bug. Please **do not paste tokens, `config.json`,
         session files or unredacted logs** — they contain full account access.
 
-        Security issues must be reported privately via
-        [Security Advisories](https://github.com/CHEAPFISS/discord-client/security/advisories/new),
+        Security issues must be reported privately — see
+        [SECURITY.md](https://github.com/CHEAPFISS/discord-client/blob/master/SECURITY.md),
         not here.
 
   - type: textarea
