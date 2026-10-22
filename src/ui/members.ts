@@ -5,6 +5,7 @@
 import { api, type Member, type VoiceStateInfo } from '../api';
 import { el } from '../dom';
 import type { PresenceUpdatePayload, VoiceMemberUpdatePayload, VoiceSpeakingPayload } from '../events';
+import { getLanguage, t } from '../i18n';
 import { state } from '../state';
 import { watchStream } from './stream';
 
@@ -54,17 +55,18 @@ function activityLines(userId: string): { text: string; title?: string }[] {
 
   const act = others[0];
   if (!act) return [];
-  const prefixes: Record<number, string> = {
-    0: 'Играет в',
-    1: 'Стримит',
-    2: 'Слушает',
-    3: 'Смотрит',
-    5: 'Соревнуется в',
-  };
+  const prefix =
+    {
+      0: t('members.playing'),
+      1: t('members.streaming'),
+      2: t('members.listening'),
+      3: t('members.watching'),
+      5: t('members.competing'),
+    }[act.kind] ?? t('members.playing');
   const extra = [act.details, act.state].filter(Boolean).join(' — ');
   return [
     {
-      text: `${ACTIVITY_ICONS[act.kind] ?? '🎮'} ${prefixes[act.kind] ?? 'Играет в'} ${act.name}`,
+      text: `${ACTIVITY_ICONS[act.kind] ?? '🎮'} ${prefix} ${act.name}`,
       title: extra ? `${act.name} — ${extra}` : undefined,
     },
   ];
@@ -74,8 +76,8 @@ function activityLines(userId: string): { text: string; title?: string }[] {
  *  Возвращает null, если участник ничего не демонстрирует. */
 function streamStatusLine(vs: VoiceStateInfo | undefined): string | null {
   if (!vs) return null;
-  if (vs.self_stream) return '🖥 Демонстрирует свой экран';
-  if (vs.self_video) return '📹 Демонстрирует камеру';
+  if (vs.self_stream) return t('members.screenShare');
+  if (vs.self_video) return t('members.camera');
   return null;
 }
 
@@ -96,7 +98,7 @@ export async function loadMembers(guildId: string, channelId: string): Promise<v
   membersEl.innerHTML = '';
   const loading = document.createElement('div');
   loading.className = 'members-empty';
-  loading.textContent = 'Загружаю участников…';
+  loading.textContent = t('members.loading');
   membersEl.appendChild(loading);
 
   try {
@@ -132,7 +134,7 @@ export async function loadMembers(guildId: string, channelId: string): Promise<v
     membersEl.innerHTML = '';
     const err = document.createElement('div');
     err.className = 'members-empty';
-    err.textContent = 'Не удалось загрузить участников: ' + e;
+    err.textContent = t('members.loadError', { error: String(e) });
     membersEl.appendChild(err);
   }
 }
@@ -184,7 +186,7 @@ export function renderMembers(): void {
   if (state.members.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'members-empty';
-    empty.textContent = 'Нет участников';
+    empty.textContent = t('members.empty');
     membersEl.appendChild(empty);
     return;
   }
@@ -203,7 +205,7 @@ export function renderMembers(): void {
     if (g.members.length === 0) continue;
     const role = roleById.get(g.id);
     groups.push({
-      name: role?.name ?? 'Участники',
+      name: role?.name ?? t('members.groupFallback'),
       color: role ? roleColor(role.color) : null,
       members: g.members,
     });
@@ -212,8 +214,8 @@ export function renderMembers(): void {
   // остаётся в своей роли, как в официальном клиенте).
   const online = rest.filter((m) => statusOf(m.user_id) !== 'offline');
   const offline = rest.filter((m) => statusOf(m.user_id) === 'offline');
-  if (online.length > 0) groups.push({ name: 'В сети', color: null, members: online });
-  if (offline.length > 0) groups.push({ name: 'Не в сети', color: null, members: offline });
+  if (online.length > 0) groups.push({ name: t('members.online'), color: null, members: online });
+  if (offline.length > 0) groups.push({ name: t('members.offline'), color: null, members: offline });
 
   for (const g of groups) {
     const groupEl = document.createElement('div');
@@ -263,7 +265,7 @@ function memberRow(m: Member): HTMLElement {
   if (m.bot) {
     const bot = document.createElement('span');
     bot.className = 'bot-badge';
-    bot.textContent = 'БОТ';
+    bot.textContent = t('members.bot');
     name.appendChild(bot);
   }
   body.appendChild(name);
@@ -292,7 +294,7 @@ function memberRow(m: Member): HTMLElement {
   } else if (!streamLine && vs) {
     const sub = document.createElement('div');
     sub.className = 'member-sub';
-    sub.textContent = '🔊 В голосовом чате';
+    sub.textContent = t('members.inVoice');
     body.appendChild(sub);
   }
 
@@ -316,7 +318,7 @@ export function renderVoiceMembers(): void {
       .filter(([, vs]) => vs.channel_id === channelId)
       .map(([uid]) => state.members.find((m) => m.user_id === uid))
       .filter((m): m is Member => m !== undefined)
-      .sort((a, b) => a.username.localeCompare(b.username, 'ru'));
+      .sort((a, b) => a.username.localeCompare(b.username, getLanguage()));
     for (const m of rows) container.appendChild(voiceMemberRow(m));
   }
 }
@@ -357,10 +359,10 @@ function voiceMemberRow(m: Member): HTMLElement {
   if (vs?.self_stream) {
     const live = document.createElement('span');
     live.className = 'live-badge';
-    live.textContent = 'В ЭФИРЕ';
-    live.title = 'Демонстрация — двойной клик, чтобы смотреть';
+    live.textContent = t('members.live');
+    live.title = t('members.liveTitle');
     row.appendChild(live);
-    row.title = 'Двойной клик — смотреть демонстрацию';
+    row.title = t('members.watchTitle');
     row.ondblclick = (e) => {
       e.stopPropagation();
       void watchStream(m.user_id, m.username, vs.channel_id);

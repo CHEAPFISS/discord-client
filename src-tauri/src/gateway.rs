@@ -252,7 +252,7 @@ async fn gateway_once(
     // 1) жду HELLO (op 10) с heartbeat_interval
     let mut last_seq: Option<u64> = None;
     let heartbeat_ms = loop {
-        let msg = read.next().await.ok_or("поток закрылся")?;
+        let msg = read.next().await.ok_or(crate::i18n::t(crate::i18n::Key::StreamClosed))?;
         let ping = match msg {
             Ok(Message::Text(text)) => text,
             Ok(Message::Ping(pay)) => {
@@ -263,7 +263,7 @@ async fn gateway_once(
                 log::info!("Gateway до HELLO: {other:?}");
                 continue;
             }
-            Err(e) => return Err(format!("ws при HELLO: {e}")),
+            Err(e) => return Err(format!("{}: {e}", crate::i18n::t(crate::i18n::Key::WsHello))),
         };
         let v: serde_json::Value = serde_json::from_str(&ping).map_err(|e| e.to_string())?;
         if v["op"].as_u64() == Some(10) {
@@ -319,11 +319,11 @@ async fn gateway_once(
                             return Err("outgoing send failed".into());
                         }
                     }
-                    None => { return Err("командный канал закрылся".into()); }
+                    None => { return Err(crate::i18n::t(crate::i18n::Key::CommandChannelClosed).into()); }
                 }
             }
             msg = read.next() => {
-                let msg = msg.ok_or("поток закрылся")?;
+                let msg = msg.ok_or(crate::i18n::t(crate::i18n::Key::StreamClosed))?;
                 let text = match msg.map_err(|e| e.to_string())? {
                     Message::Text(t) => t,
                     Message::Ping(pay) => {
@@ -335,7 +335,10 @@ async fn gateway_once(
                     }
                     Message::Pong(_) => continue,
                     Message::Close(c) => {
-                        return Err(format!("gateway закрыл соединение: {c:?}"));
+                        return Err(format!(
+                            "{}: {c:?}",
+                            crate::i18n::t(crate::i18n::Key::GatewayClosed)
+                        ));
                     }
                     other => {
                         log::debug!("Gateway прочее: {other:?}");
@@ -352,7 +355,10 @@ async fn gateway_once(
                 match op {
                     11 => { awaiting_ack = false; /* HEARTBEAT ACK */ }
                     7 | 9 => {
-                        return Err(format!("gateway требует реконнект (op {op})"));
+                        return Err(format!(
+                            "{} (op {op})",
+                            crate::i18n::t(crate::i18n::Key::GatewayReconnect)
+                        ));
                     }
                     _ => {}
                 }
@@ -837,7 +843,7 @@ async fn start_gateway_inner(
     // Любой выход ниже (нет токена — ранний return; конец/паника loop) снимает флаг.
     let run_guard = GatewayRunGuard;
 
-    let token = state.token().ok_or("Не залогинен")?;
+    let token = state.token().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *sender.tx.lock().await = Some(tx);
 

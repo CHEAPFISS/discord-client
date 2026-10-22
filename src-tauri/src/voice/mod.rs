@@ -25,7 +25,7 @@ pub(crate) async fn join_voice_channel(
     // user_id берём из сессии
     let user_id = {
         let guard = state.session.lock().unwrap();
-        guard.as_ref().ok_or("Не залогинен")?.user_id.clone()
+        guard.as_ref().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?.user_id.clone()
     };
 
     // Повторный клик по каналу, где мы уже в голосе: живое соединение не рвём
@@ -522,7 +522,7 @@ pub(crate) fn request_voice_rejoin(app: &AppHandle, state: &DiscordState) {
         log::warn!("Voice: re-join не запрошен — исчерпан лимит ({VOICE_REJOIN_LIMIT})");
         let _ = app.emit(
             "voice_status",
-            json!({"status": "error", "error": "не получил свежую voice-пару после 3 попыток"}),
+            json!({"status": "error", "error": crate::i18n::t(crate::i18n::Key::FreshVoicePair)}),
         );
         return;
     }

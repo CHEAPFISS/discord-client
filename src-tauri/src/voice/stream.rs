@@ -82,13 +82,13 @@ async fn connect_stream_task(
     let rtc_server = target
         .rtc_server_id
         .as_deref()
-        .ok_or("stream: нет rtc_server_id")?
+        .ok_or(crate::i18n::t(crate::i18n::Key::StreamNoRtcServer))?
         .parse::<u64>()
         .map_err(|e| format!("rtc_server_id: {e}"))?;
     let rtc_channel = target
         .rtc_channel_id
         .as_deref()
-        .ok_or("stream: нет rtc_channel_id")?
+        .ok_or(crate::i18n::t(crate::i18n::Key::StreamNoRtcChannel))?
         .parse::<u64>()
         .map_err(|e| format!("rtc_channel_id: {e}"))?;
     let user = user_id
@@ -97,11 +97,11 @@ async fn connect_stream_task(
     let endpoint = target
         .endpoint
         .as_deref()
-        .ok_or("stream: нет endpoint")?
+        .ok_or(crate::i18n::t(crate::i18n::Key::StreamNoEndpoint))?
         .trim()
         .trim_start_matches("wss://")
         .to_string();
-    let token = target.token.clone().ok_or("stream: нет token")?;
+    let token = target.token.clone().ok_or(crate::i18n::t(crate::i18n::Key::StreamNoToken))?;
 
     log::info!(
         "Stream connect (oto): key={} rtc_server={rtc_server} rtc_channel={rtc_channel} endpoint={endpoint}",

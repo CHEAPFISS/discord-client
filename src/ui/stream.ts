@@ -7,6 +7,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { api } from '../api';
 import { el } from '../dom';
 import type { StreamUpdatePayload } from '../events';
+import { t } from '../i18n';
 import { state } from '../state';
 import { renderMembers } from './members';
 import { showError } from './toast';
@@ -19,6 +20,8 @@ let videoCtx: CanvasRenderingContext2D | null = null;
 let videoFrameInFlight = false;
 /** Размер последнего кадра — для вписывания canvas в сцену при resize окна. */
 let videoFrameSize: { w: number; h: number } | null = null;
+/** Remembered status key so a language switch can re-translate the placeholder. */
+let lastStreamStatus: { key: string; vars?: Record<string, string | number> } | null = null;
 
 /** Вписывает canvas в сцену с сохранением пропорций КАДРА: элемент заполняет
  *  максимум доступного места. Без этого canvas жил в «натуральную» величину
@@ -109,21 +112,21 @@ export async function watchStream(
   }
   // Discord требует находиться в том же голосовом канале, что и стример.
   if (state.currentVoiceChannelId !== channelId) {
-    showError('Смотреть демонстрацию можно только из того же голосового канала — сначала зайди в него');
+    showError(t('stream.onlySameChannel'));
     return;
   }
   if (state.watching) await stopWatching(); // смотрим максимум один стрим
   const stream_key = `guild:${guildId}:${channelId}:${ownerId}`;
   state.watching = { stream_key, owner_id: ownerId, username };
   setStreamOwner(username);
-  setStreamStatus('Подключаюсь к демонстрации…');
+  setStreamStatusKey('stream.connecting');
   el('streamScreen').classList.add('active');
   attachVideoChannel(); // бинарный канал кадров — бэкенд начнёт слать пиксели
   try {
     await api.watchStream(stream_key);
   } catch (e) {
     closeScreen();
-    showError('Не удалось подключиться к демонстрации: ' + e);
+    showError(t('stream.connectError', { error: String(e) }));
   }
 }
 
@@ -147,7 +150,7 @@ export function handleStreamUpdate(p: StreamUpdatePayload): void {
     closeScreen();
     return;
   }
-  setStreamStatus('Подключено — показываю демонстрацию');
+  setStreamStatusKey('stream.connected');
 }
 
 function closeScreen(): void {
@@ -165,8 +168,16 @@ function setStreamOwner(name: string): void {
   el('streamOwner').textContent = name;
 }
 
-function setStreamStatus(text: string): void {
-  el('streamStatus').textContent = text;
+function setStreamStatusKey(key: string, vars?: Record<string, string | number>): void {
+  lastStreamStatus = { key, vars };
+  el('streamStatus').textContent = t(key, vars);
+}
+
+/** Re-applies the current language to the stream placeholder. */
+export function refreshStreamUi(): void {
+  if (lastStreamStatus) {
+    el('streamStatus').textContent = t(lastStreamStatus.key, lastStreamStatus.vars);
+  }
 }
 
 /** Кнопка закрытия + ESC. Вызывается один раз из app.ts. */

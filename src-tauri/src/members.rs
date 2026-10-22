@@ -66,7 +66,7 @@ pub async fn get_guild_members(
     }
 
     if channel_id.is_empty() {
-        return Err("Нет канала для запроса списка участников".into());
+        return Err(crate::i18n::t(crate::i18n::Key::NoMembersChannel).into());
     }
 
     // 2) Диапазоны по числу участников (из READY); неизвестно — первый.
@@ -108,7 +108,10 @@ pub async fn get_guild_members(
     });
     if let Err(e) = sender.send(subscribe).await {
         state.member_fetch.fetches.lock().unwrap().remove(&guild_id);
-        return Err(format!("Не удалось отправить подписку на список: {e}"));
+        return Err(format!(
+            "{}: {e}",
+            crate::i18n::t(crate::i18n::Key::MembersSubscribe)
+        ));
     }
 
     // 4) Ждём SYNC по всем запрошенным диапазонам.
@@ -177,7 +180,7 @@ pub async fn get_guild_members(
     }
     groups.retain(|g| !g.members.is_empty());
     if groups.is_empty() {
-        return Err("Discord не прислал список участников".into());
+        return Err(crate::i18n::t(crate::i18n::Key::MembersNoList).into());
     }
 
     // Проверка по логам: состав групп vs d.groups из GUILD_MEMBER_LIST_UPDATE,

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -10,23 +10,27 @@
   <div id="errorToast" class="error-toast"></div>
 
   <div id="login" class="login-screen">
+    <select class="lang-select login-lang" data-language-select data-i18n-aria-label="lang.label" aria-label="Language">
+      <option value="ru">RU</option>
+      <option value="en">EN</option>
+    </select>
     <h1>Discord Client</h1>
-    <p>Лёгкий клиент для звонков и чата</p>
-    <button class="login-btn" id="loginBtn">Войти через Discord</button>
-    <div class="login-divider">или</div>
+    <p data-i18n="login.subtitle">A lightweight client for calls and chat</p>
+    <button class="login-btn" id="loginBtn" data-i18n="login.oauthButton">Sign in with Discord</button>
+    <div class="login-divider" data-i18n="login.divider">or</div>
     <div class="token-row">
-      <input type="password" id="tokenInput" placeholder="User-токен Discord (MTI9…)" autocomplete="off" />
-      <button class="login-btn small" id="tokenBtn">Войти</button>
+      <input type="password" id="tokenInput" data-i18n-placeholder="login.tokenPlaceholder" placeholder="Discord user token (MTI9…)" autocomplete="off" />
+      <button class="login-btn small" id="tokenBtn" data-i18n="login.tokenButton">Sign in</button>
     </div>
     <details class="token-help">
-      <summary>Как получить user-токен</summary>
+      <summary data-i18n="login.helpSummary">How to get a user token</summary>
       <ol>
-        <li>Открой <b>discord.com</b> в браузере и войди в аккаунт</li>
-        <li>Нажми <b>F12</b> → вкладка <b>Console</b></li>
-        <li>Введи: <code>localStorage.getItem("token").replaceAll('"','')</code></li>
-        <li>Скопируй результат и вставь сюда</li>
+        <li data-i18n-html="login.helpStep1">Open <b>discord.com</b> in your browser and sign in</li>
+        <li data-i18n-html="login.helpStep2">Press <b>F12</b> → open the <b>Console</b> tab</li>
+        <li data-i18n-html="login.helpStep3">Run: <code>localStorage.getItem("token").replaceAll('"','')</code></li>
+        <li data-i18n="login.helpStep4">Copy the result and paste it here</li>
       </ol>
-      <p class="warn">⚠️ Токен — это доступ к твоему аккаунту. Никому его не передавай. Использование сторонних клиентов — против ToS Discord.</p>
+      <p class="warn" data-i18n="login.tokenWarning">⚠️ The token grants full access to your account. Never share it. Third-party clients violate Discord's Terms of Service.</p>
     </details>
     <div class="login-status" id="loginStatus"></div>
   </div>
@@ -40,55 +44,59 @@
       <div class="channels" id="channels"></div>
       <div class="app-status" id="appStatus" data-state="disconnected">
         <div class="status-dot" id="statusDot"></div>
-        <span id="statusText">Нет соединения</span>
+        <span id="statusText" data-i18n="status.disconnected">No connection</span>
       </div>
       <div class="user-area">
         <div class="avatar" id="avatar">?</div>
         <div class="user-name" id="username">…</div>
-        <button class="logout-btn" id="logoutBtn" title="Сбросить сессию">Выйти</button>
+        <button class="logout-btn" id="logoutBtn" data-i18n="app.logout" data-i18n-title="app.logoutTitle">Sign out</button>
+        <select class="lang-select" data-language-select data-i18n-aria-label="lang.label" aria-label="Language">
+          <option value="ru">RU</option>
+          <option value="en">EN</option>
+        </select>
       </div>
     </div>
 
     <div class="chat">
       <div class="chat-header">
-        <span id="chatHeader">Выбери канал</span>
+        <span id="chatHeader" data-i18n="app.chooseChannel">Select a channel</span>
       </div>
       <div class="messages" id="messages"></div>
       <div class="input-area">
         <div class="input-wrapper">
-          <textarea id="messageInput" rows="1" placeholder="Сообщение..."></textarea>
+          <textarea id="messageInput" rows="1" data-i18n-placeholder="app.messagePlaceholder" placeholder="Message…"></textarea>
         </div>
       </div>
     </div>
 
     <div class="members" id="members"></div>
 
-    <!-- Экран чужой демонстрации: накрывает чат и колонку участников -->
+    <!-- Screen-share viewer: covers the chat and the member list. -->
     <div class="stream-screen" id="streamScreen">
       <div class="stream-stage">
-        <!-- Видеокадр декодера (RGBA) рисуется сюда. Пока не пришёл первый
-             кадр — скрыт, виден плейсхолдер со статусом подключения. -->
+        <!-- The decoder's frames (JPEG) are drawn here. Until the first frame
+             arrives the canvas stays hidden and a status placeholder is shown. -->
         <canvas id="streamCanvas" class="stream-canvas" hidden></canvas>
         <div class="stream-placeholder" id="streamPlaceholder">
           <div class="stream-big-icon">🖥</div>
-          <div class="stream-status" id="streamStatus">Подключаюсь к демонстрации…</div>
-          <div class="stream-hint">Звук демонстрации уже играет. Картинку подключим на следующем этапе (декодер видео).</div>
+          <div class="stream-status" id="streamStatus" data-i18n="stream.connecting">Connecting to the stream…</div>
+          <div class="stream-hint" data-i18n="stream.hint">The stream's audio is already playing.</div>
         </div>
       </div>
       <div class="stream-bar">
         <span class="stream-live">●</span>
         <span class="stream-owner" id="streamOwner">…</span>
-        <button class="stream-stop" id="streamStop">Перестать смотреть</button>
+        <button class="stream-stop" id="streamStop" data-i18n="stream.stop">Stop watching</button>
       </div>
     </div>
 
     <div class="voice-call" id="voiceCall">
-      <h3 id="voiceChannelName">Голосовой канал</h3>
+      <h3 id="voiceChannelName">Voice channel</h3>
       <div class="voice-status" id="voiceStatus"></div>
       <div class="voice-controls">
-        <button class="voice-btn" id="micBtn" title="Микрофон">🎙</button>
-        <button class="voice-btn" id="deafBtn" title="Звук">🔊</button>
-        <button class="voice-btn hangup" id="hangupBtn" title="Отключиться">📴</button>
+        <button class="voice-btn" id="micBtn" data-i18n-title="voice.mic" title="Microphone">🎙</button>
+        <button class="voice-btn" id="deafBtn" data-i18n-title="voice.sound" title="Sound">🔊</button>
+        <button class="voice-btn hangup" id="hangupBtn" data-i18n-title="voice.hangup" title="Disconnect">📴</button>
       </div>
     </div>
   </div>

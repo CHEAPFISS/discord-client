@@ -2,6 +2,7 @@
 
 import { api, type Channel, type Guild } from '../api';
 import { el } from '../dom';
+import { t } from '../i18n';
 import { state } from '../state';
 import { openTextChannel } from './chat';
 import { loadMembers, renderVoiceMembers } from './members';
@@ -76,6 +77,6 @@ export async function loadChannels(guild: Guild): Promise<void> {
     });
     renderVoiceMembers();
   } catch (e) {
-    showError('Не удалось загрузить каналы: ' + e);
+    showError(t('channels.loadError', { error: String(e) }));
   }
 }

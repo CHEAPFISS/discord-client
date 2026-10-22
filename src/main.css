@@ -575,10 +575,30 @@ textarea::placeholder { color: var(--text-low); }
 }
 .logout-btn:hover { border-color: var(--accent-light); color: var(--accent-light); background: var(--accent-dim); }
 
+/* Language picker (login screen + user area) */
+.lang-select {
+  background: var(--surface-3);
+  border: 1px solid var(--outline-strong);
+  color: var(--text-mid);
+  border-radius: var(--radius-full);
+  padding: 5px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+.lang-select:hover,
+.lang-select:focus { border-color: var(--accent-light); color: var(--accent-light); outline: none; }
+.login-lang { position: absolute; top: 20px; right: 24px; }
+
 /* --- Login screen --- */
 .login-screen {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   height: 100vh; text-align: center;
+  position: relative;
   background: radial-gradient(900px 480px at 50% -8%, rgba(0, 172, 193, 0.1), transparent 65%);
 }
 .login-screen h1 { margin-bottom: 12px; font-size: 34px; letter-spacing: -0.5px; }

@@ -55,7 +55,7 @@ fn play_audio_blocking(
     let host = cpal::default_host();
     let device = host
         .default_output_device()
-        .ok_or("нет выходного аудиоустройства")?;
+        .ok_or(crate::i18n::t(crate::i18n::Key::NoOutputAudio))?;
 
     let mut chosen = None;
     'ranges: for range in device
@@ -74,7 +74,7 @@ fn play_audio_blocking(
             .default_output_config()
             .ok()
             .and_then(|d| Some(d.config()))
-            .expect("нет конфигурации выходного аудиоустройства")
+            .expect(crate::i18n::t(crate::i18n::Key::NoOutputConfig))
     });
     if config.sample_rate.0 != 48000 || config.channels != 2 {
         log::warn!(

@@ -39,7 +39,7 @@ impl MicSource {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
-            .ok_or("нет входного аудиоустройства (микрофон)")?;
+            .ok_or(crate::i18n::t(crate::i18n::Key::NoInputAudio))?;
 
         let mut chosen = None;
         'cfg: for range in device
@@ -54,7 +54,7 @@ impl MicSource {
             }
         }
         let config = chosen
-            .ok_or("нет подходящей конфигурации микрофона (f32, моно, 48 кГц)")?
+            .ok_or(crate::i18n::t(crate::i18n::Key::NoMicConfig))?
             .config();
 
         let ring: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
@@ -194,7 +194,12 @@ impl MicSource {
                         }
                     }
                 })
-                .map_err(|e| format!("поток кодирования микрофона: {e}"))?;
+                .map_err(|e| {
+                    crate::i18n::f(
+                        crate::i18n::Key::MicEncodeTask,
+                        &[("e", &e.to_string())],
+                    )
+                })?;
         }
 
         // cpal::Stream не Send: его нельзя ни перенести в другой поток, ни
@@ -252,11 +257,13 @@ impl MicSource {
                         }
                     }
                 })
-                .map_err(|e| format!("поток микрофонного потока: {e}"))?;
+                .map_err(|e| {
+                    crate::i18n::f(crate::i18n::Key::MicStreamTask, &[("e", &e.to_string())])
+                })?;
         }
         ready_rx
             .recv()
-            .map_err(|_| "поток микрофонного потока завершился рано")??;
+            .map_err(|_| crate::i18n::t(crate::i18n::Key::MicStreamEnded).to_string())??;
 
         Ok(Self {
             encoded,

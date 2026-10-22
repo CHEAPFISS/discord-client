@@ -28,7 +28,7 @@ pub(crate) async fn login_with_token(
 ) -> Result<serde_json::Value, String> {
     let token = token.trim().trim_matches('"').to_string();
     if token.is_empty() {
-        return Err("Пустой токен".into());
+        return Err(crate::i18n::t(crate::i18n::Key::EmptyToken).into());
     }
 
     let client = crate::api::http();
@@ -37,16 +37,28 @@ pub(crate) async fn login_with_token(
         .header("Authorization", &token)
         .send()
         .await
-        .map_err(|e| format!("Ошибка запроса: {e}"))?
+        .map_err(|e| {
+            crate::i18n::f(
+                crate::i18n::Key::RequestFailed,
+                &[("e", &e.to_string())],
+            )
+        })?
         .json()
         .await
-        .map_err(|e| format!("Ошибка разбора: {e}"))?;
+        .map_err(|e| {
+            crate::i18n::f(crate::i18n::Key::JsonParse, &[("e", &e.to_string())])
+        })?;
 
     if resp["code"].is_number() || resp["id"].is_null() {
-        return Err(format!(
-            "Токен не принят Discord: {} (code {})",
-            resp["message"].as_str().unwrap_or("неизвестно"),
-            resp["code"].as_u64().unwrap_or(0)
+        return Err(crate::i18n::f(
+            crate::i18n::Key::TokenRejected,
+            &[
+                (
+                    "message",
+                    resp["message"].as_str().unwrap_or(crate::i18n::t(crate::i18n::Key::Unknown)),
+                ),
+                ("code", &resp["code"].as_u64().unwrap_or(0).to_string()),
+            ],
         ));
     }
 
@@ -121,9 +133,13 @@ pub(crate) async fn wait_for_code_on(
         let got_state = qparam("state");
 
         let response_body = if got_code.is_some() {
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body style='font-family:sans-serif;background:#36393f;color:#fff;text-align:center;padding-top:80px'><h2>Вход выполнен!</h2><p>Вернитесь в приложение.</p></body></html>"
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body style='font-family:sans-serif;background:#36393f;color:#fff;text-align:center;padding-top:80px'><h2>{}</h2><p>{}</p></body></html>",
+                crate::i18n::t(crate::i18n::Key::OAuthSuccess),
+                crate::i18n::t(crate::i18n::Key::OAuthReturn)
+            )
         } else {
-            "HTTP/1.1 404 Not Found\r\n\r\n<!doctype html><html><body>listening for callback...</body></html>\r\n"
+            "HTTP/1.1 404 Not Found\r\n\r\n<!doctype html><html><body>listening for callback...</body></html>\r\n".to_string()
         };
         let _ = stream.write_all(response_body.as_bytes()).await;
 
@@ -153,12 +169,19 @@ pub(crate) async fn start_login(state: State<'_, DiscordState>) -> Result<serde_
 
     let listener: TcpListener = TcpListener::bind("127.0.0.1:1436")
         .await
-        .map_err(|e| format!("Порт 1436 занят: {e}"))?;
+        .map_err(|e| {
+            crate::i18n::f(crate::i18n::Key::PortBusy, &[("e", &e.to_string())])
+        })?;
 
     std::process::Command::new("xdg-open")
         .arg(&auth_url)
         .spawn()
-        .map_err(|e| format!("Не удалось открыть браузер: {e}"))?;
+        .map_err(|e| {
+            crate::i18n::f(
+                crate::i18n::Key::BrowserOpenFailed,
+                &[("e", &e.to_string())],
+            )
+        })?;
 
     // Таймаут: если пользователь не вернулся из браузера, логин не должен
     // висеть вечно и удерживать порт 1436.
@@ -167,7 +190,7 @@ pub(crate) async fn start_login(state: State<'_, DiscordState>) -> Result<serde_
         wait_for_code_on(listener, &state_token),
     )
     .await
-    .map_err(|_| "Вход отменён: не пришёл ответ из браузера за 10 минут".to_string())??;
+    .map_err(|_| crate::i18n::t(crate::i18n::Key::LoginCancelled).to_string())??;
 
     // 2. Обмен кода на токен
     let client = crate::api::http();
@@ -184,10 +207,14 @@ pub(crate) async fn start_login(state: State<'_, DiscordState>) -> Result<serde_
         .form(&params)
         .send()
         .await
-        .map_err(|e| format!("Ошибка HTTP при обмене кода: {e}"))?
+        .map_err(|e| {
+            crate::i18n::f(crate::i18n::Key::OAuthHttp, &[("e", &e.to_string())])
+        })?
         .json()
         .await
-        .map_err(|e| format!("Не удалось разобрать токен-ответ: {e}"))?;
+        .map_err(|e| {
+            crate::i18n::f(crate::i18n::Key::TokenParse, &[("e", &e.to_string())])
+        })?;
 
     // 3. Информация о пользователе
     #[derive(Debug, Deserialize)]
@@ -201,10 +228,14 @@ pub(crate) async fn start_login(state: State<'_, DiscordState>) -> Result<serde_
         .bearer_auth(&token_resp.access_token)
         .send()
         .await
-        .map_err(|e| format!("Ошибка запроса пользователя: {e}"))?
+        .map_err(|e| {
+            crate::i18n::f(crate::i18n::Key::UserRequest, &[("e", &e.to_string())])
+        })?
         .json()
         .await
-        .map_err(|e| format!("Не удалось разобрать пользователя: {e}"))?;
+        .map_err(|e| {
+            crate::i18n::f(crate::i18n::Key::UserParse, &[("e", &e.to_string())])
+        })?;
 
     // 4. Сохраняем сессию
     let session = discord_client::DiscordSession {
@@ -236,7 +267,7 @@ pub(crate) async fn logout(
 #[command]
 pub(crate) fn get_me(state: State<'_, DiscordState>) -> Result<serde_json::Value, String> {
     let guard = state.session.lock().unwrap();
-    let s = guard.as_ref().ok_or("Не залогинен")?;
+    let s = guard.as_ref().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
     Ok(serde_json::json!({
         "user_id": s.user_id,
         "username": s.username

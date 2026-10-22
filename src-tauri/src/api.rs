@@ -179,10 +179,17 @@ async fn discord_get(token: &str, url: &str) -> Result<serde_json::Value, String
         .header("Authorization", token)
         .send()
         .await
-        .map_err(|e| format!("Ошибка запроса: {e}"))?
+        .map_err(|e| {
+            crate::i18n::f(
+                crate::i18n::Key::RequestFailed,
+                &[("e", &e.to_string())],
+            )
+        })?
         .json()
         .await
-        .map_err(|e| format!("Ошибка разбора JSON: {e}"))
+        .map_err(|e| {
+            crate::i18n::f(crate::i18n::Key::JsonParse, &[("e", &e.to_string())])
+        })
 }
 
 /// POST JSON с bearer-токеном.
@@ -197,18 +204,30 @@ async fn discord_post_json(
         .json(body)
         .send()
         .await
-        .map_err(|e| format!("Ошибка запроса: {e}"))?
+        .map_err(|e| {
+            crate::i18n::f(
+                crate::i18n::Key::RequestFailed,
+                &[("e", &e.to_string())],
+            )
+        })?
         .json()
         .await
-        .map_err(|e| format!("Ошибка разбора JSON: {e}"))
+        .map_err(|e| {
+            crate::i18n::f(crate::i18n::Key::JsonParse, &[("e", &e.to_string())])
+        })
 }
 
 /// Сообщение API об ошибке, если ответ не массив.
 fn api_error(resp: &serde_json::Value) -> String {
-    format!(
-        "API вернул ошибку: {} (code {})",
-        resp["message"].as_str().unwrap_or("неизвестно"),
-        resp["code"].as_u64().unwrap_or(0)
+    crate::i18n::f(
+        crate::i18n::Key::ApiError,
+        &[
+            (
+                "message",
+                resp["message"].as_str().unwrap_or(crate::i18n::t(crate::i18n::Key::Unknown)),
+            ),
+            ("code", &resp["code"].as_u64().unwrap_or(0).to_string()),
+        ],
     )
 }
 
@@ -216,7 +235,7 @@ fn api_error(resp: &serde_json::Value) -> String {
 pub async fn get_guilds(
     state: State<'_, DiscordState>,
 ) -> Result<Vec<Guild>, String> {
-    let token = state.token().ok_or("Не залогинен")?;
+    let token = state.token().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
     let resp = discord_get(&token, &format!("{API_BASE}/users/@me/guilds")).await?;
 
     let mut guilds = Vec::new();
@@ -239,7 +258,7 @@ pub async fn get_channels(
     state: State<'_, DiscordState>,
     guild_id: String,
 ) -> Result<Vec<Channel>, String> {
-    let token = state.token().ok_or("Не залогинен")?;
+    let token = state.token().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
     let resp = discord_get(
         &token,
         &format!("{API_BASE}/guilds/{guild_id}/channels"),
@@ -267,7 +286,7 @@ pub async fn get_guild_roles(
     state: State<'_, DiscordState>,
     guild_id: String,
 ) -> Result<Vec<Role>, String> {
-    let token = state.token().ok_or("Не залогинен")?;
+    let token = state.token().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
     let resp = discord_get(&token, &format!("{API_BASE}/guilds/{guild_id}/roles")).await?;
 
     let mut out = Vec::new();
@@ -314,7 +333,7 @@ pub async fn get_messages(
     state: State<'_, DiscordState>,
     channel_id: String,
 ) -> Result<Vec<ChatMessage>, String> {
-    let token = state.token().ok_or("Не залогинен")?;
+    let token = state.token().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
     let resp = discord_get(
         &token,
         &format!("{API_BASE}/channels/{channel_id}/messages?limit=50"),
@@ -345,7 +364,7 @@ pub async fn send_message(
     channel_id: String,
     content: String,
 ) -> Result<ChatMessage, String> {
-    let token = state.token().ok_or("Не залогинен")?;
+    let token = state.token().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
     let resp = discord_post_json(
         &token,
         &format!("{API_BASE}/channels/{channel_id}/messages"),
@@ -364,13 +383,18 @@ pub async fn send_message(
 #[command]
 pub fn open_url(url: String) -> Result<(), String> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
-        return Err("Разрешены только http(s)-ссылки".into());
+        return Err(crate::i18n::t(crate::i18n::Key::OnlyHttpLinks).into());
     }
     std::process::Command::new("xdg-open")
         .arg(&url)
         .spawn()
         .map(|_| ())
-        .map_err(|e| format!("Не удалось открыть: {e}"))
+        .map_err(|e| {
+            crate::i18n::f(
+                crate::i18n::Key::OpenUrlFailed,
+                &[("e", &e.to_string())],
+            )
+        })
 }
 
 #[cfg(test)]

@@ -127,6 +127,10 @@ export interface Me {
 }
 
 export const api = {
+  // --- i18n ---
+  /** Backend localizes the few user-facing error strings it returns. */
+  setLanguage: (lang: string) => invoke<void>('set_language', { lang }),
+
   // --- Вход ---
   getMe: () => invoke<Me>('get_me'),
   startLogin: () => invoke<Me>('start_login'),

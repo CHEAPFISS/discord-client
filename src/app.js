@@ -121,6 +121,9 @@ var Resource = class {
 
 // src/api.ts
 var api = {
+  // --- i18n ---
+  /** Backend localizes the few user-facing error strings it returns. */
+  setLanguage: (lang) => invoke("set_language", { lang }),
   // --- Вход ---
   getMe: () => invoke("get_me"),
   startLogin: () => invoke("start_login"),
@@ -154,7 +157,7 @@ var api = {
 // src/dom.ts
 function el(id) {
   const node = document.getElementById(id);
-  if (!node) throw new Error(`\u042D\u043B\u0435\u043C\u0435\u043D\u0442 #${id} \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D \u0432 index.html`);
+  if (!node) throw new Error(`Element #${id} not found in index.html`);
   return node;
 }
 
@@ -211,6 +214,225 @@ var onPresenceUpdate = (cb) => subscribe("presence_update", cb);
 var onVoiceMemberUpdate = (cb) => subscribe("voice_member_update", cb);
 var onVoiceSpeaking = (cb) => subscribe("voice_speaking", cb);
 var onStreamUpdate = (cb) => subscribe("stream_update", cb);
+
+// src/locales/en.json
+var en_default = {
+  "lang.label": "Language",
+  "login.subtitle": "A lightweight client for calls and chat",
+  "login.oauthButton": "Sign in with Discord",
+  "login.divider": "or",
+  "login.tokenPlaceholder": "Discord user token (MTI9\u2026)",
+  "login.tokenButton": "Sign in",
+  "login.helpSummary": "How to get a user token",
+  "login.helpStep1": "Open <b>discord.com</b> in your browser and sign in",
+  "login.helpStep2": "Press <b>F12</b> \u2192 open the <b>Console</b> tab",
+  "login.helpStep3": `Run: <code>localStorage.getItem("token").replaceAll('"','')</code>`,
+  "login.helpStep4": "Copy the result and paste it here",
+  "login.tokenWarning": "\u26A0\uFE0F The token grants full access to your account. Never share it. Third-party clients violate Discord's Terms of Service.",
+  "login.openingBrowser": "Opening Discord in your browser\u2026",
+  "login.tokenRequired": "Paste a token into the field",
+  "login.checkingToken": "Checking the token\u2026",
+  "status.connected": "Connected to Discord",
+  "status.reconnecting": "Reconnecting\u2026",
+  "status.reconnectingWithError": "Reconnecting\u2026 ({error})",
+  "status.disconnected": "No connection",
+  "app.logout": "Sign out",
+  "app.logoutTitle": "Reset session",
+  "app.chooseChannel": "Select a channel",
+  "app.messagePlaceholder": "Message\u2026",
+  "app.voiceReady": "Voice: data collected, connecting to the voice server\u2026",
+  "voice.panelTitle": "Voice channel",
+  "voice.connecting": "Connecting\u2026",
+  "voice.error": "Error: {error}",
+  "voice.mic": "Microphone",
+  "voice.micMuted": "Microphone muted",
+  "voice.sound": "Sound",
+  "voice.deafened": "Sound muted",
+  "voice.hangup": "Disconnect",
+  "voice.connected": "Voice: connected (DAVE/E2EE) \u{1F3A7}",
+  "voice.reconnecting": "Voice: reconnecting\u2026",
+  "voice.errorStatus": "Voice error: {error}",
+  "voice.unknownError": "unknown",
+  "servers.empty": "No servers found",
+  "servers.loadError": "Failed to load servers: {error}",
+  "channels.loadError": "Failed to load channels: {error}",
+  "chat.empty": "No messages yet",
+  "chat.historyError": "Failed to load history: {error}",
+  "chat.sendError": "Failed to send: {error}",
+  "chat.openInBrowser": "Open in browser",
+  "members.loading": "Loading members\u2026",
+  "members.loadError": "Failed to load members: {error}",
+  "members.empty": "No members",
+  "members.groupFallback": "Members",
+  "members.online": "Online",
+  "members.offline": "Offline",
+  "members.bot": "BOT",
+  "members.inVoice": "\u{1F50A} In a voice channel",
+  "members.playing": "Playing",
+  "members.streaming": "Streaming",
+  "members.listening": "Listening to",
+  "members.watching": "Watching",
+  "members.competing": "Competing in",
+  "members.screenShare": "\u{1F5A5} Sharing screen",
+  "members.camera": "\u{1F4F9} Camera on",
+  "members.live": "LIVE",
+  "members.liveTitle": "Screen share \u2014 double-click to watch",
+  "members.watchTitle": "Double-click to watch the stream",
+  "stream.connecting": "Connecting to the stream\u2026",
+  "stream.hint": "The stream's audio is already playing.",
+  "stream.stop": "Stop watching",
+  "stream.connected": "Connected \u2014 showing the stream",
+  "stream.onlySameChannel": "You can only watch a stream from the same voice channel \u2014 join it first",
+  "stream.connectError": "Failed to connect to the stream: {error}"
+};
+
+// src/locales/ru.json
+var ru_default = {
+  "lang.label": "\u042F\u0437\u044B\u043A",
+  "login.subtitle": "\u041B\u0451\u0433\u043A\u0438\u0439 \u043A\u043B\u0438\u0435\u043D\u0442 \u0434\u043B\u044F \u0437\u0432\u043E\u043D\u043A\u043E\u0432 \u0438 \u0447\u0430\u0442\u0430",
+  "login.oauthButton": "\u0412\u043E\u0439\u0442\u0438 \u0447\u0435\u0440\u0435\u0437 Discord",
+  "login.divider": "\u0438\u043B\u0438",
+  "login.tokenPlaceholder": "User-\u0442\u043E\u043A\u0435\u043D Discord (MTI9\u2026)",
+  "login.tokenButton": "\u0412\u043E\u0439\u0442\u0438",
+  "login.helpSummary": "\u041A\u0430\u043A \u043F\u043E\u043B\u0443\u0447\u0438\u0442\u044C user-\u0442\u043E\u043A\u0435\u043D",
+  "login.helpStep1": "\u041E\u0442\u043A\u0440\u043E\u0439 <b>discord.com</b> \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435 \u0438 \u0432\u043E\u0439\u0434\u0438 \u0432 \u0430\u043A\u043A\u0430\u0443\u043D\u0442",
+  "login.helpStep2": "\u041D\u0430\u0436\u043C\u0438 <b>F12</b> \u2192 \u0432\u043A\u043B\u0430\u0434\u043A\u0430 <b>Console</b>",
+  "login.helpStep3": `\u0412\u0432\u0435\u0434\u0438: <code>localStorage.getItem("token").replaceAll('"','')</code>`,
+  "login.helpStep4": "\u0421\u043A\u043E\u043F\u0438\u0440\u0443\u0439 \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442 \u0438 \u0432\u0441\u0442\u0430\u0432\u044C \u0441\u044E\u0434\u0430",
+  "login.tokenWarning": "\u26A0\uFE0F \u0422\u043E\u043A\u0435\u043D \u2014 \u044D\u0442\u043E \u0434\u043E\u0441\u0442\u0443\u043F \u043A \u0442\u0432\u043E\u0435\u043C\u0443 \u0430\u043A\u043A\u0430\u0443\u043D\u0442\u0443. \u041D\u0438\u043A\u043E\u043C\u0443 \u0435\u0433\u043E \u043D\u0435 \u043F\u0435\u0440\u0435\u0434\u0430\u0432\u0430\u0439. \u0418\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D\u0438\u0435 \u0441\u0442\u043E\u0440\u043E\u043D\u043D\u0438\u0445 \u043A\u043B\u0438\u0435\u043D\u0442\u043E\u0432 \u2014 \u043F\u0440\u043E\u0442\u0438\u0432 ToS Discord.",
+  "login.openingBrowser": "\u041E\u0442\u043A\u0440\u044B\u0432\u0430\u044E Discord \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435\u2026",
+  "login.tokenRequired": "\u0412\u0441\u0442\u0430\u0432\u044C \u0442\u043E\u043A\u0435\u043D \u0432 \u043F\u043E\u043B\u0435",
+  "login.checkingToken": "\u041F\u0440\u043E\u0432\u0435\u0440\u044F\u044E \u0442\u043E\u043A\u0435\u043D\u2026",
+  "status.connected": "\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u043A Discord",
+  "status.reconnecting": "\u041F\u0435\u0440\u0435\u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435\u2026",
+  "status.reconnectingWithError": "\u041F\u0435\u0440\u0435\u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435\u2026 ({error})",
+  "status.disconnected": "\u041D\u0435\u0442 \u0441\u043E\u0435\u0434\u0438\u043D\u0435\u043D\u0438\u044F",
+  "app.logout": "\u0412\u044B\u0439\u0442\u0438",
+  "app.logoutTitle": "\u0421\u0431\u0440\u043E\u0441\u0438\u0442\u044C \u0441\u0435\u0441\u0441\u0438\u044E",
+  "app.chooseChannel": "\u0412\u044B\u0431\u0435\u0440\u0438 \u043A\u0430\u043D\u0430\u043B",
+  "app.messagePlaceholder": "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435...",
+  "app.voiceReady": "\u0413\u043E\u043B\u043E\u0441: \u0434\u0430\u043D\u043D\u044B\u0435 \u0441\u043E\u0431\u0440\u0430\u043D\u044B, \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C \u043A \u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u043C\u0443 \u0441\u0435\u0440\u0432\u0435\u0440\u0443\u2026",
+  "voice.panelTitle": "\u0413\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u0439 \u043A\u0430\u043D\u0430\u043B",
+  "voice.connecting": "\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C\u2026",
+  "voice.error": "\u041E\u0448\u0438\u0431\u043A\u0430: {error}",
+  "voice.mic": "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D",
+  "voice.micMuted": "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u0437\u0430\u0433\u043B\u0443\u0448\u0451\u043D",
+  "voice.sound": "\u0417\u0432\u0443\u043A",
+  "voice.deafened": "\u0417\u0432\u0443\u043A \u043E\u0442\u043A\u043B\u044E\u0447\u0451\u043D",
+  "voice.hangup": "\u041E\u0442\u043A\u043B\u044E\u0447\u0438\u0442\u044C\u0441\u044F",
+  "voice.connected": "\u0413\u043E\u043B\u043E\u0441: \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E (DAVE/E2EE) \u{1F3A7}",
+  "voice.reconnecting": "\u0413\u043E\u043B\u043E\u0441: \u043F\u0435\u0440\u0435\u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435\u2026",
+  "voice.errorStatus": "\u041E\u0448\u0438\u0431\u043A\u0430 \u0433\u043E\u043B\u043E\u0441\u0430: {error}",
+  "voice.unknownError": "\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u043E",
+  "servers.empty": "\u0421\u0435\u0440\u0432\u0435\u0440\u044B \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u044B",
+  "servers.loadError": "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0441\u0435\u0440\u0432\u0435\u0440\u044B: {error}",
+  "channels.loadError": "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u043A\u0430\u043D\u0430\u043B\u044B: {error}",
+  "chat.empty": "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u043F\u043E\u043A\u0430 \u043D\u0435\u0442",
+  "chat.historyError": "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0438\u0441\u0442\u043E\u0440\u0438\u044E: {error}",
+  "chat.sendError": "\u041D\u0435 \u043E\u0442\u043F\u0440\u0430\u0432\u0438\u043B\u043E\u0441\u044C: {error}",
+  "chat.openInBrowser": "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435",
+  "members.loading": "\u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044E \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u043E\u0432\u2026",
+  "members.loadError": "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u043E\u0432: {error}",
+  "members.empty": "\u041D\u0435\u0442 \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u043E\u0432",
+  "members.groupFallback": "\u0423\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u0438",
+  "members.online": "\u0412 \u0441\u0435\u0442\u0438",
+  "members.offline": "\u041D\u0435 \u0432 \u0441\u0435\u0442\u0438",
+  "members.bot": "\u0411\u041E\u0422",
+  "members.inVoice": "\u{1F50A} \u0412 \u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u043C \u0447\u0430\u0442\u0435",
+  "members.playing": "\u0418\u0433\u0440\u0430\u0435\u0442 \u0432",
+  "members.streaming": "\u0421\u0442\u0440\u0438\u043C\u0438\u0442",
+  "members.listening": "\u0421\u043B\u0443\u0448\u0430\u0435\u0442",
+  "members.watching": "\u0421\u043C\u043E\u0442\u0440\u0438\u0442",
+  "members.competing": "\u0421\u043E\u0440\u0435\u0432\u043D\u0443\u0435\u0442\u0441\u044F \u0432",
+  "members.screenShare": "\u{1F5A5} \u0414\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0438\u0440\u0443\u0435\u0442 \u0441\u0432\u043E\u0439 \u044D\u043A\u0440\u0430\u043D",
+  "members.camera": "\u{1F4F9} \u0414\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0438\u0440\u0443\u0435\u0442 \u043A\u0430\u043C\u0435\u0440\u0443",
+  "members.live": "\u0412 \u042D\u0424\u0418\u0420\u0415",
+  "members.liveTitle": "\u0414\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044F \u2014 \u0434\u0432\u043E\u0439\u043D\u043E\u0439 \u043A\u043B\u0438\u043A, \u0447\u0442\u043E\u0431\u044B \u0441\u043C\u043E\u0442\u0440\u0435\u0442\u044C",
+  "members.watchTitle": "\u0414\u0432\u043E\u0439\u043D\u043E\u0439 \u043A\u043B\u0438\u043A \u2014 \u0441\u043C\u043E\u0442\u0440\u0435\u0442\u044C \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E",
+  "stream.connecting": "\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C \u043A \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u0438\u2026",
+  "stream.hint": "\u0417\u0432\u0443\u043A \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u0438 \u0443\u0436\u0435 \u0438\u0433\u0440\u0430\u0435\u0442.",
+  "stream.stop": "\u041F\u0435\u0440\u0435\u0441\u0442\u0430\u0442\u044C \u0441\u043C\u043E\u0442\u0440\u0435\u0442\u044C",
+  "stream.connected": "\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u2014 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u044E \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E",
+  "stream.onlySameChannel": "\u0421\u043C\u043E\u0442\u0440\u0435\u0442\u044C \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E \u043C\u043E\u0436\u043D\u043E \u0442\u043E\u043B\u044C\u043A\u043E \u0438\u0437 \u0442\u043E\u0433\u043E \u0436\u0435 \u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u0433\u043E \u043A\u0430\u043D\u0430\u043B\u0430 \u2014 \u0441\u043D\u0430\u0447\u0430\u043B\u0430 \u0437\u0430\u0439\u0434\u0438 \u0432 \u043D\u0435\u0433\u043E",
+  "stream.connectError": "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u044C\u0441\u044F \u043A \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u0438: {error}"
+};
+
+// src/i18n.ts
+var DICTS = { en: en_default, ru: ru_default };
+var STORAGE_KEY = "discord-client.lang";
+var CHANGE_EVENT = "dc:languagechange";
+var current = "en";
+function getLanguage() {
+  return current;
+}
+function t(key, vars) {
+  const raw = DICTS[current][key] ?? DICTS.en[key] ?? key;
+  if (!vars) return raw;
+  return raw.replace(
+    /\{(\w+)\}/g,
+    (_, name) => vars[name] !== void 0 ? String(vars[name]) : `{${name}}`
+  );
+}
+function isLanguage(value) {
+  return value === "en" || value === "ru";
+}
+function applyStaticTexts(root = document) {
+  root.querySelectorAll("[data-i18n]").forEach((node) => {
+    node.textContent = t(node.dataset.i18n ?? "");
+  });
+  root.querySelectorAll("[data-i18n-html]").forEach((node) => {
+    node.innerHTML = t(node.dataset.i18nHtml ?? "");
+  });
+  root.querySelectorAll("[data-i18n-placeholder]").forEach((node) => {
+    node.setAttribute("placeholder", t(node.dataset.i18nPlaceholder ?? ""));
+  });
+  root.querySelectorAll("[data-i18n-title]").forEach((node) => {
+    node.setAttribute("title", t(node.dataset.i18nTitle ?? ""));
+  });
+  root.querySelectorAll("[data-i18n-aria-label]").forEach((node) => {
+    node.setAttribute("aria-label", t(node.dataset.i18nAriaLabel ?? ""));
+  });
+}
+function syncSelects() {
+  document.querySelectorAll("[data-language-select]").forEach((select) => {
+    select.value = current;
+  });
+}
+function applyLanguage(lang, persist = true) {
+  current = lang;
+  document.documentElement.lang = lang;
+  if (persist) {
+    try {
+      localStorage.setItem(STORAGE_KEY, lang);
+    } catch {
+    }
+  }
+  applyStaticTexts();
+  syncSelects();
+  void api.setLanguage(lang).catch(() => {
+  });
+  window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: lang }));
+}
+function initI18n() {
+  let stored = null;
+  try {
+    stored = localStorage.getItem(STORAGE_KEY);
+  } catch {
+  }
+  const systemIsRussian = (navigator.language || "").toLowerCase().startsWith("ru");
+  const initial = isLanguage(stored) ? stored : systemIsRussian ? "ru" : "en";
+  applyLanguage(initial, false);
+  document.querySelectorAll("[data-language-select]").forEach((select) => {
+    select.value = initial;
+    select.addEventListener("change", () => {
+      const next = select.value;
+      if (isLanguage(next)) applyLanguage(next);
+    });
+  });
+}
+function onLanguageChange(cb) {
+  window.addEventListener(CHANGE_EVENT, () => cb(current));
+}
 
 // src/state.ts
 var state = {
@@ -293,7 +515,10 @@ function updateBadge(channelId) {
 function fmtTime(ts) {
   if (!ts) return "";
   const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleTimeString(getLanguage() === "ru" ? "ru-RU" : "en-US", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 function escapeHtml(text) {
   const div = document.createElement("div");
@@ -357,9 +582,9 @@ function embedNode(e) {
   const parts = [];
   if (e.author) parts.push(`<div class="embed-author">${escapeHtml(e.author)}</div>`);
   if (e.title) {
-    const t = escapeHtml(e.title);
+    const t2 = escapeHtml(e.title);
     parts.push(
-      e.url ? `<a class="embed-title" href="${e.url.replace(/"/g, "%22")}">${t}</a>` : `<div class="embed-title">${t}</div>`
+      e.url ? `<a class="embed-title" href="${e.url.replace(/"/g, "%22")}">${t2}</a>` : `<div class="embed-title">${t2}</div>`
     );
   }
   if (e.description) {
@@ -427,7 +652,7 @@ function appendAttachments(bubble, msg) {
       img.src = a.url;
       img.alt = a.filename;
       img.loading = "lazy";
-      img.title = "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435";
+      img.title = t("chat.openInBrowser");
       media.appendChild(img);
     } else if (isVideo(a)) {
       const video = document.createElement("video");
@@ -487,10 +712,10 @@ function renderMessage(msg, opts = {}) {
     };
     const gifHost = hostname(gifUrl);
     content = content.split("\n").filter((line) => {
-      const t = line.trim();
-      if (!t) return false;
-      if (t.includes(gifUrl)) return false;
-      if (/^https?:\/\/\S+$/.test(t) && gifHost && hostname(t) === gifHost) return false;
+      const t2 = line.trim();
+      if (!t2) return false;
+      if (t2.includes(gifUrl)) return false;
+      if (/^https?:\/\/\S+$/.test(t2) && gifHost && hostname(t2) === gifHost) return false;
       return true;
     }).join("\n");
   }
@@ -517,7 +742,8 @@ function clearMessages() {
   messagesEl.innerHTML = "";
   const empty = document.createElement("div");
   empty.className = "messages-empty";
-  empty.textContent = "\u0421\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u043F\u043E\u043A\u0430 \u043D\u0435\u0442";
+  empty.dataset.kind = "empty";
+  empty.textContent = t("chat.empty");
   messagesEl.appendChild(empty);
 }
 var openSeq = 0;
@@ -541,7 +767,8 @@ async function openTextChannel(channel) {
     messagesEl.innerHTML = "";
     const div = document.createElement("div");
     div.className = "messages-empty";
-    div.textContent = "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0438\u0441\u0442\u043E\u0440\u0438\u044E: " + e;
+    div.dataset.kind = "error";
+    div.textContent = t("chat.historyError", { error: String(e) });
     messagesEl.appendChild(div);
   }
 }
@@ -605,8 +832,16 @@ function initChatInput() {
       renderMessage(msg, { live: true });
       messagesEl.scrollTop = messagesEl.scrollHeight;
     } catch (err) {
-      showError("\u041D\u0435 \u043E\u0442\u043F\u0440\u0430\u0432\u0438\u043B\u043E\u0441\u044C: " + err);
+      showError(t("chat.sendError", { error: String(err) }));
     }
+  });
+}
+function refreshChatTexts() {
+  document.querySelectorAll(".messages-empty").forEach((node) => {
+    if (node.dataset.kind === "empty") node.textContent = t("chat.empty");
+  });
+  document.querySelectorAll(".att-image").forEach((img) => {
+    img.title = t("chat.openInBrowser");
   });
 }
 
@@ -614,6 +849,7 @@ function initChatInput() {
 var videoCtx = null;
 var videoFrameInFlight = false;
 var videoFrameSize = null;
+var lastStreamStatus = null;
 function fitCanvasToStage() {
   const canvas = el("streamCanvas");
   const stage = el("streamScreen").querySelector(".stream-stage");
@@ -678,21 +914,21 @@ async function watchStream(ownerId, username, channelId) {
     return;
   }
   if (state.currentVoiceChannelId !== channelId) {
-    showError("\u0421\u043C\u043E\u0442\u0440\u0435\u0442\u044C \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E \u043C\u043E\u0436\u043D\u043E \u0442\u043E\u043B\u044C\u043A\u043E \u0438\u0437 \u0442\u043E\u0433\u043E \u0436\u0435 \u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u0433\u043E \u043A\u0430\u043D\u0430\u043B\u0430 \u2014 \u0441\u043D\u0430\u0447\u0430\u043B\u0430 \u0437\u0430\u0439\u0434\u0438 \u0432 \u043D\u0435\u0433\u043E");
+    showError(t("stream.onlySameChannel"));
     return;
   }
   if (state.watching) await stopWatching();
   const stream_key = `guild:${guildId}:${channelId}:${ownerId}`;
   state.watching = { stream_key, owner_id: ownerId, username };
   setStreamOwner(username);
-  setStreamStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C \u043A \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u0438\u2026");
+  setStreamStatusKey("stream.connecting");
   el("streamScreen").classList.add("active");
   attachVideoChannel();
   try {
     await api.watchStream(stream_key);
   } catch (e) {
     closeScreen();
-    showError("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0438\u0442\u044C\u0441\u044F \u043A \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u0438: " + e);
+    showError(t("stream.connectError", { error: String(e) }));
   }
 }
 async function stopWatching() {
@@ -711,7 +947,7 @@ function handleStreamUpdate(p) {
     closeScreen();
     return;
   }
-  setStreamStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u2014 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u044E \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E");
+  setStreamStatusKey("stream.connected");
 }
 function closeScreen() {
   state.watching = null;
@@ -725,8 +961,14 @@ function closeScreen() {
 function setStreamOwner(name) {
   el("streamOwner").textContent = name;
 }
-function setStreamStatus(text) {
-  el("streamStatus").textContent = text;
+function setStreamStatusKey(key, vars) {
+  lastStreamStatus = { key, vars };
+  el("streamStatus").textContent = t(key, vars);
+}
+function refreshStreamUi() {
+  if (lastStreamStatus) {
+    el("streamStatus").textContent = t(lastStreamStatus.key, lastStreamStatus.vars);
+  }
 }
 function initStreamScreen() {
   el("streamStop").onclick = () => void stopWatching();
@@ -770,25 +1012,25 @@ function activityLines(userId) {
   }
   const act = others[0];
   if (!act) return [];
-  const prefixes = {
-    0: "\u0418\u0433\u0440\u0430\u0435\u0442 \u0432",
-    1: "\u0421\u0442\u0440\u0438\u043C\u0438\u0442",
-    2: "\u0421\u043B\u0443\u0448\u0430\u0435\u0442",
-    3: "\u0421\u043C\u043E\u0442\u0440\u0438\u0442",
-    5: "\u0421\u043E\u0440\u0435\u0432\u043D\u0443\u0435\u0442\u0441\u044F \u0432"
-  };
+  const prefix = {
+    0: t("members.playing"),
+    1: t("members.streaming"),
+    2: t("members.listening"),
+    3: t("members.watching"),
+    5: t("members.competing")
+  }[act.kind] ?? t("members.playing");
   const extra = [act.details, act.state].filter(Boolean).join(" \u2014 ");
   return [
     {
-      text: `${ACTIVITY_ICONS[act.kind] ?? "\u{1F3AE}"} ${prefixes[act.kind] ?? "\u0418\u0433\u0440\u0430\u0435\u0442 \u0432"} ${act.name}`,
+      text: `${ACTIVITY_ICONS[act.kind] ?? "\u{1F3AE}"} ${prefix} ${act.name}`,
       title: extra ? `${act.name} \u2014 ${extra}` : void 0
     }
   ];
 }
 function streamStatusLine(vs) {
   if (!vs) return null;
-  if (vs.self_stream) return "\u{1F5A5} \u0414\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0438\u0440\u0443\u0435\u0442 \u0441\u0432\u043E\u0439 \u044D\u043A\u0440\u0430\u043D";
-  if (vs.self_video) return "\u{1F4F9} \u0414\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0438\u0440\u0443\u0435\u0442 \u043A\u0430\u043C\u0435\u0440\u0443";
+  if (vs.self_stream) return t("members.screenShare");
+  if (vs.self_video) return t("members.camera");
   return null;
 }
 function roleColor(color) {
@@ -806,7 +1048,7 @@ async function loadMembers(guildId, channelId) {
   membersEl.innerHTML = "";
   const loading = document.createElement("div");
   loading.className = "members-empty";
-  loading.textContent = "\u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044E \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u043E\u0432\u2026";
+  loading.textContent = t("members.loading");
   membersEl.appendChild(loading);
   try {
     const groups = await api.getGuildMembers(guildId, channelId);
@@ -836,7 +1078,7 @@ async function loadMembers(guildId, channelId) {
     membersEl.innerHTML = "";
     const err = document.createElement("div");
     err.className = "members-empty";
-    err.textContent = "\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u043E\u0432: " + e;
+    err.textContent = t("members.loadError", { error: String(e) });
     membersEl.appendChild(err);
   }
 }
@@ -874,7 +1116,7 @@ function renderMembers() {
   if (state.members.length === 0) {
     const empty = document.createElement("div");
     empty.className = "members-empty";
-    empty.textContent = "\u041D\u0435\u0442 \u0443\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u043E\u0432";
+    empty.textContent = t("members.empty");
     membersEl.appendChild(empty);
     return;
   }
@@ -889,15 +1131,15 @@ function renderMembers() {
     if (g.members.length === 0) continue;
     const role = roleById.get(g.id);
     groups.push({
-      name: role?.name ?? "\u0423\u0447\u0430\u0441\u0442\u043D\u0438\u043A\u0438",
+      name: role?.name ?? t("members.groupFallback"),
       color: role ? roleColor(role.color) : null,
       members: g.members
     });
   }
   const online = rest.filter((m) => statusOf(m.user_id) !== "offline");
   const offline = rest.filter((m) => statusOf(m.user_id) === "offline");
-  if (online.length > 0) groups.push({ name: "\u0412 \u0441\u0435\u0442\u0438", color: null, members: online });
-  if (offline.length > 0) groups.push({ name: "\u041D\u0435 \u0432 \u0441\u0435\u0442\u0438", color: null, members: offline });
+  if (online.length > 0) groups.push({ name: t("members.online"), color: null, members: online });
+  if (offline.length > 0) groups.push({ name: t("members.offline"), color: null, members: offline });
   for (const g of groups) {
     const groupEl = document.createElement("div");
     groupEl.className = "member-group";
@@ -941,7 +1183,7 @@ function memberRow(m) {
   if (m.bot) {
     const bot = document.createElement("span");
     bot.className = "bot-badge";
-    bot.textContent = "\u0411\u041E\u0422";
+    bot.textContent = t("members.bot");
     name.appendChild(bot);
   }
   body.appendChild(name);
@@ -965,7 +1207,7 @@ function memberRow(m) {
   } else if (!streamLine && vs) {
     const sub = document.createElement("div");
     sub.className = "member-sub";
-    sub.textContent = "\u{1F50A} \u0412 \u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u043C \u0447\u0430\u0442\u0435";
+    sub.textContent = t("members.inVoice");
     body.appendChild(sub);
   }
   row.appendChild(av);
@@ -981,7 +1223,7 @@ function letterSpan(name, cls = "member-letter") {
 function renderVoiceMembers() {
   for (const [channelId, container] of Object.entries(state.voiceMemberEls)) {
     container.innerHTML = "";
-    const rows = [...state.memberVoice.entries()].filter(([, vs]) => vs.channel_id === channelId).map(([uid]) => state.members.find((m) => m.user_id === uid)).filter((m) => m !== void 0).sort((a, b) => a.username.localeCompare(b.username, "ru"));
+    const rows = [...state.memberVoice.entries()].filter(([, vs]) => vs.channel_id === channelId).map(([uid]) => state.members.find((m) => m.user_id === uid)).filter((m) => m !== void 0).sort((a, b) => a.username.localeCompare(b.username, getLanguage()));
     for (const m of rows) container.appendChild(voiceMemberRow(m));
   }
 }
@@ -1016,10 +1258,10 @@ function voiceMemberRow(m) {
   if (vs?.self_stream) {
     const live = document.createElement("span");
     live.className = "live-badge";
-    live.textContent = "\u0412 \u042D\u0424\u0418\u0420\u0415";
-    live.title = "\u0414\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044F \u2014 \u0434\u0432\u043E\u0439\u043D\u043E\u0439 \u043A\u043B\u0438\u043A, \u0447\u0442\u043E\u0431\u044B \u0441\u043C\u043E\u0442\u0440\u0435\u0442\u044C";
+    live.textContent = t("members.live");
+    live.title = t("members.liveTitle");
     row.appendChild(live);
-    row.title = "\u0414\u0432\u043E\u0439\u043D\u043E\u0439 \u043A\u043B\u0438\u043A \u2014 \u0441\u043C\u043E\u0442\u0440\u0435\u0442\u044C \u0434\u0435\u043C\u043E\u043D\u0441\u0442\u0440\u0430\u0446\u0438\u044E";
+    row.title = t("members.watchTitle");
     row.ondblclick = (e) => {
       e.stopPropagation();
       void watchStream(m.user_id, m.username, vs.channel_id);
@@ -1029,31 +1271,43 @@ function voiceMemberRow(m) {
 }
 
 // src/ui/voice.ts
-function setVoiceStatus(text) {
-  el("voiceStatus").textContent = text;
+var lastVoiceText = null;
+function setVoiceStatusKey(key, vars) {
+  lastVoiceText = { key, vars };
+  el("voiceStatus").textContent = t(key, vars);
+}
+function clearVoiceStatus() {
+  lastVoiceText = null;
+  el("voiceStatus").textContent = "";
 }
 async function joinVoice(channel) {
   const guildId = state.currentGuildId;
   if (!guildId) return;
   state.currentVoiceChannelId = channel.id;
   el("voiceChannelName").textContent = channel.name;
-  setVoiceStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C\u2026");
+  setVoiceStatusKey("voice.connecting");
   el("voiceCall").classList.add("active");
   try {
     await api.joinVoice(channel.id, guildId);
   } catch (e) {
-    setVoiceStatus("\u041E\u0448\u0438\u0431\u043A\u0430: " + e);
+    setVoiceStatusKey("voice.error", { error: String(e) });
   }
 }
 function paintVoiceButtons() {
   const mic = el("micBtn");
   mic.classList.toggle("active", state.micMuted);
-  mic.title = state.micMuted ? "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D \u0437\u0430\u0433\u043B\u0443\u0448\u0451\u043D" : "\u041C\u0438\u043A\u0440\u043E\u0444\u043E\u043D";
+  mic.title = state.micMuted ? t("voice.micMuted") : t("voice.mic");
   mic.textContent = state.micMuted ? "\u{1F507}" : "\u{1F399}";
   const deaf = el("deafBtn");
   deaf.classList.toggle("active", state.deafened);
-  deaf.title = state.deafened ? "\u0417\u0432\u0443\u043A \u043E\u0442\u043A\u043B\u044E\u0447\u0451\u043D" : "\u0417\u0432\u0443\u043A";
+  deaf.title = state.deafened ? t("voice.deafened") : t("voice.sound");
   deaf.textContent = state.deafened ? "\u{1F507}" : "\u{1F50A}";
+}
+function refreshVoiceUi() {
+  paintVoiceButtons();
+  if (lastVoiceText) {
+    el("voiceStatus").textContent = t(lastVoiceText.key, lastVoiceText.vars);
+  }
 }
 function initVoiceControls() {
   el("micBtn").onclick = async () => {
@@ -1089,14 +1343,14 @@ function initVoiceControls() {
     } catch {
     }
     state.currentVoiceChannelId = null;
-    setVoiceStatus("");
+    clearVoiceStatus();
     el("voiceCall").classList.remove("active");
   };
 }
 function handleVoiceStatus(p) {
   if (p.status === "left") {
     state.currentVoiceChannelId = null;
-    setVoiceStatus("");
+    clearVoiceStatus();
     el("voiceCall").classList.remove("active");
     state.micMuted = false;
     state.deafened = false;
@@ -1107,13 +1361,13 @@ function handleVoiceStatus(p) {
     state.micMuted = false;
     state.deafened = false;
     paintVoiceButtons();
-    setVoiceStatus("\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C\u2026");
+    setVoiceStatusKey("voice.connecting");
   } else if (p.status === "connected") {
-    setVoiceStatus("\u0413\u043E\u043B\u043E\u0441: \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E (DAVE/E2EE) \u{1F3A7}");
+    setVoiceStatusKey("voice.connected");
   } else if (p.status === "reconnecting") {
-    setVoiceStatus("\u0413\u043E\u043B\u043E\u0441: \u043F\u0435\u0440\u0435\u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435\u2026");
+    setVoiceStatusKey("voice.reconnecting");
   } else if (p.status === "error") {
-    setVoiceStatus("\u041E\u0448\u0438\u0431\u043A\u0430 \u0433\u043E\u043B\u043E\u0441\u0430: " + (p.error || "\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u043E"));
+    setVoiceStatusKey("voice.errorStatus", { error: p.error || t("voice.unknownError") });
   }
 }
 
@@ -1171,7 +1425,7 @@ async function loadChannels(guild) {
     });
     renderVoiceMembers();
   } catch (e) {
-    showError("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u043A\u0430\u043D\u0430\u043B\u044B: " + e);
+    showError(t("channels.loadError", { error: String(e) }));
   }
 }
 
@@ -1190,7 +1444,7 @@ async function loadGuilds() {
     if (!guilds || guilds.length === 0) {
       const empty = document.createElement("div");
       empty.className = "empty-servers";
-      empty.textContent = "\u0421\u0435\u0440\u0432\u0435\u0440\u044B \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u044B";
+      empty.textContent = t("servers.empty");
       serversEl.appendChild(empty);
       return;
     }
@@ -1220,8 +1474,13 @@ async function loadGuilds() {
       serversEl.appendChild(div);
     });
   } catch (e) {
-    showError("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0441\u0435\u0440\u0432\u0435\u0440\u044B: " + e);
+    showError(t("servers.loadError", { error: String(e) }));
   }
+}
+function refreshServerTexts() {
+  document.querySelectorAll(".empty-servers").forEach((node) => {
+    node.textContent = t("servers.empty");
+  });
 }
 
 // src/login.ts
@@ -1248,7 +1507,7 @@ function initLogin() {
   const loginBtn = el("loginBtn");
   loginBtn.addEventListener("click", async () => {
     loginBtn.disabled = true;
-    loginStatus.textContent = "\u041E\u0442\u043A\u0440\u044B\u0432\u0430\u044E Discord \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0435\u2026";
+    loginStatus.textContent = t("login.openingBrowser");
     try {
       const res = await api.startLogin();
       showApp(res.username);
@@ -1265,11 +1524,11 @@ function initLogin() {
   tokenBtn.addEventListener("click", async () => {
     const token = tokenInput.value.trim();
     if (!token) {
-      showError("\u0412\u0441\u0442\u0430\u0432\u044C \u0442\u043E\u043A\u0435\u043D \u0432 \u043F\u043E\u043B\u0435");
+      showError(t("login.tokenRequired"));
       return;
     }
     tokenBtn.disabled = true;
-    loginStatus.textContent = "\u041F\u0440\u043E\u0432\u0435\u0440\u044F\u044E \u0442\u043E\u043A\u0435\u043D\u2026";
+    loginStatus.textContent = t("login.checkingToken");
     try {
       const res = await api.loginWithToken(token);
       tokenInput.value = "";
@@ -1285,37 +1544,59 @@ function initLogin() {
 }
 
 // src/ui/status.ts
+var lastStatus = "disconnected";
+var lastError = null;
 function setGatewayStatus(status, error) {
+  lastStatus = status;
+  lastError = error ?? null;
+  renderGatewayStatus();
+}
+function refreshGatewayStatus() {
+  renderGatewayStatus();
+}
+function renderGatewayStatus() {
   const pill = el("appStatus");
   const text = el("statusText");
-  switch (status) {
+  switch (lastStatus) {
     case "connected":
     case "ready":
       pill.dataset.state = "connected";
-      text.textContent = "\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E \u043A Discord";
+      text.textContent = t("status.connected");
       break;
     case "reconnecting":
       pill.dataset.state = "reconnecting";
-      text.textContent = error ? `\u041F\u0435\u0440\u0435\u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435\u2026 (${error})` : "\u041F\u0435\u0440\u0435\u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u0435\u2026";
+      text.textContent = lastError ? t("status.reconnectingWithError", { error: lastError }) : t("status.reconnecting");
       break;
     default:
       pill.dataset.state = "disconnected";
-      text.textContent = "\u041D\u0435\u0442 \u0441\u043E\u0435\u0434\u0438\u043D\u0435\u043D\u0438\u044F";
+      text.textContent = t("status.disconnected");
   }
 }
 
 // src/app.ts
+initI18n();
 onMessageCreate((p) => appendLiveMessage(p));
 onGatewayStatus((p) => setGatewayStatus(p.status, p.error));
 onVoiceStatus((p) => handleVoiceStatus(p));
 onVoiceChannelReady(() => {
-  setVoiceStatus("\u0413\u043E\u043B\u043E\u0441: \u0434\u0430\u043D\u043D\u044B\u0435 \u0441\u043E\u0431\u0440\u0430\u043D\u044B, \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0430\u044E\u0441\u044C \u043A \u0433\u043E\u043B\u043E\u0441\u043E\u0432\u043E\u043C\u0443 \u0441\u0435\u0440\u0432\u0435\u0440\u0443\u2026");
+  setVoiceStatusKey("app.voiceReady");
 });
 onPresenceUpdate((p) => handlePresenceUpdate(p));
 onVoiceMemberUpdate((p) => handleVoiceMemberUpdate(p));
 onVoiceSpeaking((p) => handleVoiceSpeaking(p));
 onStreamUpdate((p) => handleStreamUpdate(p));
 void api.getGatewayStatus().then((p) => setGatewayStatus(p.status, p.error ?? void 0)).catch(() => {
+});
+onLanguageChange(() => {
+  refreshGatewayStatus();
+  refreshVoiceUi();
+  refreshStreamUi();
+  refreshChatTexts();
+  refreshServerTexts();
+  if (state.membersGuildId) {
+    renderMembers();
+    renderVoiceMembers();
+  }
 });
 initLogin();
 initChatInput();

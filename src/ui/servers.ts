@@ -2,6 +2,7 @@
 
 import { api, type Guild } from '../api';
 import { el } from '../dom';
+import { t } from '../i18n';
 import { loadChannels } from './channels';
 import { showError } from './toast';
 
@@ -20,7 +21,7 @@ export async function loadGuilds(): Promise<void> {
     if (!guilds || guilds.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'empty-servers';
-      empty.textContent = 'Серверы не найдены';
+      empty.textContent = t('servers.empty');
       serversEl.appendChild(empty);
       return;
     }
@@ -52,6 +53,13 @@ export async function loadGuilds(): Promise<void> {
       serversEl.appendChild(div);
     });
   } catch (e) {
-    showError('Не удалось загрузить серверы: ' + e);
+    showError(t('servers.loadError', { error: String(e) }));
   }
+}
+
+/** Re-applies the current language to a rendered empty state. */
+export function refreshServerTexts(): void {
+  document.querySelectorAll<HTMLElement>('.empty-servers').forEach((node) => {
+    node.textContent = t('servers.empty');
+  });
 }

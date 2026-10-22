@@ -2,6 +2,7 @@
 
 import { api, type Attachment, type Channel, type ChatMessage, type Embed } from '../api';
 import { el } from '../dom';
+import { getLanguage, t } from '../i18n';
 import { state } from '../state';
 import { showError } from './toast';
 import { updateBadge } from './unread';
@@ -9,7 +10,10 @@ import { updateBadge } from './unread';
 function fmtTime(ts: string): string {
   if (!ts) return '';
   const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString(getLanguage() === 'ru' ? 'ru-RU' : 'en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function escapeHtml(text: string): string {
@@ -175,7 +179,7 @@ function appendAttachments(bubble: HTMLElement, msg: ChatMessage): void {
       img.src = a.url;
       img.alt = a.filename;
       img.loading = 'lazy';
-      img.title = 'Открыть в браузере';
+      img.title = t('chat.openInBrowser');
       media.appendChild(img);
     } else if (isVideo(a)) {
       const video = document.createElement('video');
@@ -279,7 +283,8 @@ function clearMessages(): void {
   messagesEl.innerHTML = '';
   const empty = document.createElement('div');
   empty.className = 'messages-empty';
-  empty.textContent = 'Сообщений пока нет';
+  empty.dataset.kind = 'empty';
+  empty.textContent = t('chat.empty');
   messagesEl.appendChild(empty);
 }
 
@@ -310,7 +315,8 @@ export async function openTextChannel(channel: Channel): Promise<void> {
     messagesEl.innerHTML = '';
     const div = document.createElement('div');
     div.className = 'messages-empty';
-    div.textContent = 'Не удалось загрузить историю: ' + e;
+    div.dataset.kind = 'error';
+    div.textContent = t('chat.historyError', { error: String(e) });
     messagesEl.appendChild(div);
   }
 }
@@ -380,7 +386,17 @@ export function initChatInput(): void {
       renderMessage(msg, { live: true });
       messagesEl.scrollTop = messagesEl.scrollHeight;
     } catch (err) {
-      showError('Не отправилось: ' + err);
+      showError(t('chat.sendError', { error: String(err) }));
     }
+  });
+}
+
+/** Re-applies the current language to already rendered chat placeholders/titles. */
+export function refreshChatTexts(): void {
+  document.querySelectorAll<HTMLElement>('.messages-empty').forEach((node) => {
+    if (node.dataset.kind === 'empty') node.textContent = t('chat.empty');
+  });
+  document.querySelectorAll<HTMLImageElement>('.att-image').forEach((img) => {
+    img.title = t('chat.openInBrowser');
   });
 }

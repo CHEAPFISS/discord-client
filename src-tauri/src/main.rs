@@ -3,6 +3,8 @@
 use discord_client::{DiscordState, GatewaySender};
 use tauri::{generate_context, generate_handler, Manager};
 
+pub use discord_client::i18n;
+
 mod api;
 mod auth;
 mod gateway;
@@ -30,6 +32,8 @@ fn main() {
         .manage(DiscordState::load_or_default())
         .manage(GatewaySender::new())
         .invoke_handler(generate_handler![
+            // i18n
+            i18n::set_language,
             // API
             api::get_guilds,
             api::get_channels,

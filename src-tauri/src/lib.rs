@@ -1,3 +1,5 @@
+pub mod i18n;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -18,7 +20,7 @@ impl GatewaySender {
 
     pub async fn send(&self, payload: serde_json::Value) -> Result<(), String> {
         let guard = self.tx.lock().await;
-        let sender = guard.as_ref().ok_or("Gateway не подключен")?;
+        let sender = guard.as_ref().ok_or(crate::i18n::t(crate::i18n::Key::GatewayNotConnected))?;
         sender.send(payload).map_err(|e| e.to_string())
     }
 }
@@ -377,14 +379,26 @@ pub fn read_oauth_config() -> Result<OAuthConfig, String> {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
     }
+    let path_str = path.display().to_string();
     let text = fs::read_to_string(&path).map_err(|_| {
-        format!(
-            "Не найден конфиг {}. Создай его с содержимым:\n{{\"client_id\": \"ТВОЙ_CLIENT_ID\", \"client_secret\": \"ТВОЙ_CLIENT_SECRET\"}}\n(id/secret из Discord Developer Portal → приложение → OAuth2)",
-            path.display()
+        crate::i18n::f(
+            crate::i18n::Key::ConfigMissing,
+            &[
+                ("path", path_str.as_str()),
+                (
+                    "example",
+                    "{\"client_id\": \"YOUR_CLIENT_ID\", \"client_secret\": \"YOUR_CLIENT_SECRET\"}",
+                ),
+            ],
         )
     })?;
-    let cfg: OAuthConfig = serde_json::from_str(&text)
-        .map_err(|e| format!("Ошибка разбора {}: {e}", path.display()))?;
+    let cfg: OAuthConfig = serde_json::from_str(&text).map_err(|e| {
+        let err = e.to_string();
+        crate::i18n::f(
+            crate::i18n::Key::ConfigParse,
+            &[("path", path_str.as_str()), ("e", err.as_str())],
+        )
+    })?;
     Ok(cfg)
 }
 

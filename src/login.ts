@@ -2,6 +2,7 @@
 
 import { api } from './api';
 import { el } from './dom';
+import { t } from './i18n';
 import { loadGuilds } from './ui/servers';
 import { showError } from './ui/toast';
 
@@ -36,7 +37,7 @@ export function initLogin(): void {
 
   loginBtn.addEventListener('click', async () => {
     loginBtn.disabled = true;
-    loginStatus.textContent = 'Открываю Discord в браузере…';
+    loginStatus.textContent = t('login.openingBrowser');
     try {
       const res = await api.startLogin();
       showApp(res.username);
@@ -55,11 +56,11 @@ export function initLogin(): void {
   tokenBtn.addEventListener('click', async () => {
     const token = tokenInput.value.trim();
     if (!token) {
-      showError('Вставь токен в поле');
+      showError(t('login.tokenRequired'));
       return;
     }
     tokenBtn.disabled = true;
-    loginStatus.textContent = 'Проверяю токен…';
+    loginStatus.textContent = t('login.checkingToken');
     try {
       const res = await api.loginWithToken(token);
       tokenInput.value = '';

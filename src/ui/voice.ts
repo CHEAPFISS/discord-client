@@ -1,13 +1,28 @@
-// Голосовая панель: подключение, mute/deaf, отключение.
+// Voice panel: join, mute/deaf, leave. All user-facing text goes through i18n.
 
 import { api, type Channel } from '../api';
 import { el } from '../dom';
 import type { VoiceStatusPayload } from '../events';
+import { t } from '../i18n';
 import { state } from '../state';
 import { renderVoiceMembers } from './members';
 
-export function setVoiceStatus(text: string): void {
-  el('voiceStatus').textContent = text;
+interface VoiceText {
+  key: string;
+  vars?: Record<string, string | number>;
+}
+
+let lastVoiceText: VoiceText | null = null;
+
+/** Sets the voice panel status text and remembers the key for language switches. */
+export function setVoiceStatusKey(key: string, vars?: Record<string, string | number>): void {
+  lastVoiceText = { key, vars };
+  el('voiceStatus').textContent = t(key, vars);
+}
+
+function clearVoiceStatus(): void {
+  lastVoiceText = null;
+  el('voiceStatus').textContent = '';
 }
 
 export async function joinVoice(channel: Channel): Promise<void> {
@@ -15,37 +30,45 @@ export async function joinVoice(channel: Channel): Promise<void> {
   if (!guildId) return;
   state.currentVoiceChannelId = channel.id;
   el('voiceChannelName').textContent = channel.name;
-  setVoiceStatus('Подключаюсь…');
+  setVoiceStatusKey('voice.connecting');
   el('voiceCall').classList.add('active');
   try {
     await api.joinVoice(channel.id, guildId);
   } catch (e) {
-    setVoiceStatus('Ошибка: ' + e);
+    setVoiceStatusKey('voice.error', { error: String(e) });
   }
 }
 
 export function paintVoiceButtons(): void {
   const mic = el('micBtn');
   mic.classList.toggle('active', state.micMuted);
-  mic.title = state.micMuted ? 'Микрофон заглушён' : 'Микрофон';
+  mic.title = state.micMuted ? t('voice.micMuted') : t('voice.mic');
   mic.textContent = state.micMuted ? '🔇' : '🎙';
   const deaf = el('deafBtn');
   deaf.classList.toggle('active', state.deafened);
-  deaf.title = state.deafened ? 'Звук отключён' : 'Звук';
+  deaf.title = state.deafened ? t('voice.deafened') : t('voice.sound');
   deaf.textContent = state.deafened ? '🔇' : '🔊';
 }
 
-/** Кнопки микрофона/звука/отключения. */
+/** Re-applies the current language to dynamic voice-panel texts. */
+export function refreshVoiceUi(): void {
+  paintVoiceButtons();
+  if (lastVoiceText) {
+    el('voiceStatus').textContent = t(lastVoiceText.key, lastVoiceText.vars);
+  }
+}
+
+/** Microphone/sound/hangup buttons. */
 export function initVoiceControls(): void {
   el('micBtn').onclick = async () => {
-    // Deafen подразумевает mute: клик по микрофону сначала снимает глухоту.
+    // Deafen implies mute: clicking the mic first lifts deafen.
     if (state.deafened) {
       state.deafened = false;
       state.micMuted = false;
       try {
         await api.setSelfDeaf(false);
       } catch {
-        // не в голосе — не страшно
+        // not in voice — fine
       }
       paintVoiceButtons();
       return;
@@ -54,7 +77,7 @@ export function initVoiceControls(): void {
     try {
       await api.setSelfMute(state.micMuted);
     } catch {
-      // не в голосе — не страшно
+      // not in voice — fine
     }
     paintVoiceButtons();
   };
@@ -64,9 +87,9 @@ export function initVoiceControls(): void {
     try {
       await api.setSelfDeaf(state.deafened);
     } catch {
-      // не в голосе — не страшно
+      // not in voice — fine
     }
-    // Как в Discord: deafen тянет мьют микрофона, un-deaf снимает оба.
+    // Like Discord: deafen also mutes the microphone; un-deafen lifts both.
     state.micMuted = state.deafened;
     paintVoiceButtons();
   };
@@ -75,38 +98,38 @@ export function initVoiceControls(): void {
     try {
       await api.leaveVoice();
     } catch {
-      // уже вышли — не страшно
+      // already left — fine
     }
     state.currentVoiceChannelId = null;
-    setVoiceStatus('');
+    clearVoiceStatus();
     el('voiceCall').classList.remove('active');
   };
 }
 
-/** Реакция UI на события voice_status от бэкенда. */
+/** Reacts to voice_status events from the backend. */
 export function handleVoiceStatus(p: VoiceStatusPayload): void {
   if (p.status === 'left') {
     state.currentVoiceChannelId = null;
-    setVoiceStatus('');
+    clearVoiceStatus();
     el('voiceCall').classList.remove('active');
-    // Свежий вход в канал всегда unmuted/un-deaf (op 4 при join) — кнопки сбросим.
+    // Joining a channel always starts unmuted/un-deaf (op 4) — reset the buttons.
     state.micMuted = false;
     state.deafened = false;
     state.voiceSpeaking.clear();
     renderVoiceMembers();
     paintVoiceButtons();
   } else if (p.status === 'joining') {
-    // Смена канала (join без 'left'): бэкенд сбрасывает mute/deaf на входе —
-    // кнопки синхронизируем здесь, иначе UI показывает протухший мьют.
+    // Channel switch (join without 'left'): the backend resets mute/deaf on
+    // join, so sync the buttons here instead of showing a stale mute state.
     state.micMuted = false;
     state.deafened = false;
     paintVoiceButtons();
-    setVoiceStatus('Подключаюсь…');
+    setVoiceStatusKey('voice.connecting');
   } else if (p.status === 'connected') {
-    setVoiceStatus('Голос: подключено (DAVE/E2EE) 🎧');
+    setVoiceStatusKey('voice.connected');
   } else if (p.status === 'reconnecting') {
-    setVoiceStatus('Голос: переподключение…');
+    setVoiceStatusKey('voice.reconnecting');
   } else if (p.status === 'error') {
-    setVoiceStatus('Ошибка голоса: ' + (p.error || 'неизвестно'));
+    setVoiceStatusKey('voice.errorStatus', { error: p.error || t('voice.unknownError') });
   }
 }

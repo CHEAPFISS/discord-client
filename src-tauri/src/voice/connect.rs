@@ -26,7 +26,7 @@ pub(crate) async fn connect_voice(
         let guard = state.session.lock().unwrap();
         guard
             .as_ref()
-            .ok_or("Не залогинен")?
+            .ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?
             .user_id
             .clone()
             .parse::<u64>()
