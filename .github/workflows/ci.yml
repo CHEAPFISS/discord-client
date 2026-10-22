@@ -16,7 +16,8 @@ concurrency:
 jobs:
   frontend:
     name: Frontend (types, i18n, bundle)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,7 +51,8 @@ jobs:
 
   rust:
     name: Rust (tests)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
