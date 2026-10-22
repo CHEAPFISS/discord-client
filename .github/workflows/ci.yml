@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (types, i18n, bundle)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check TypeScript
+        run: npm run fe:check
+
+      - name: Check i18n dictionaries
+        run: npm run i18n:check
+
+      - name: Build bundle
+        run: npm run fe:build
+
+      - name: Ensure src/app.js is up to date
+        run: |
+          if ! git diff --quiet -- src/app.js; then
+            echo "::error::src/app.js is stale. Run 'npm run fe:build' and commit the result."
+            git diff --stat -- src/app.js
+            git diff -- src/app.js | head -120
+            exit 1
+          fi
+
+  rust:
+    name: Rust (tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev librsvg2-dev libxdo-dev \
+            libasound2-dev libopus-dev libturbojpeg0-dev
+
+      - name: Run Rust tests
+        working-directory: src-tauri
+        run: cargo test --locked

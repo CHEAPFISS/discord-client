@@ -1,0 +1,63 @@
+name: Feature request
+description: Suggest an improvement or a new capability
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is an experimental, AI-generated project. Please read
+        [CONTRIBUTING.md](https://github.com/CHEAPFISS/discord-client/blob/master/CONTRIBUTING.md)
+        and [docs/AI_DISCLOSURE.md](https://github.com/CHEAPFISS/discord-client/blob/master/docs/AI_DISCLOSURE.md)
+        before proposing large changes.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case, not only the implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Chat / messages
+        - Voice
+        - Screen share (viewing)
+        - Screen share (broadcasting)
+        - Member list / presence
+        - UI / accessibility
+        - i18n
+        - Performance
+        - Build / packaging / CI
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to work on this and open a PR.
+          required: false
+        - label: I understand that this project uses a user token, which violates Discord's ToS.
+          required: true

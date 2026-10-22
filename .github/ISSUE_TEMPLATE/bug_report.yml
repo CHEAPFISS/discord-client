@@ -1,0 +1,95 @@
+name: Bug report
+description: Report a reproducible bug (not a security issue)
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please **do not paste tokens, `config.json`,
+        session files or unredacted logs** — they contain full account access.
+
+        Security issues must be reported privately via
+        [Security Advisories](https://github.com/CHEAPFISS/discord-client/security/advisories/new),
+        not here.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Build commit ...
+        2. Sign in with ...
+        3. Join voice channel ...
+        4. See ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include error messages or screenshots if useful (redact ids/tokens).
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Login / session
+        - Guilds, channels, messages
+        - Chat rendering (embeds, attachments, mentions)
+        - Member list / presence
+        - Voice (connect, audio, mute/deaf, DAVE)
+        - Screen-share viewing
+        - UI / theme / layout
+        - i18n / language switch
+        - Build / packaging
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Distro, desktop/session, commit/version, Rust/Node versions.
+      placeholder: "Arch Linux, niri/Wayland, commit abc1234, Rust 1.xx, Node 22"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Redact tokens, ids and message content. `RUST_LOG=debug` is usually enough.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I removed tokens, session files and other secrets from this report.
+          required: true
+        - label: I understand that using a user token violates Discord's ToS and that account termination is possible.
+          required: true
