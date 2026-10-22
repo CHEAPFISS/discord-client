@@ -6,20 +6,21 @@ use tauri::{generate_context, generate_handler, Manager};
 pub use discord_client::i18n;
 
 mod api;
+mod audio;
 mod auth;
 mod gateway;
 mod members;
-mod voice;
-mod audio;
 mod video;
 mod video_render;
+mod voice;
 
 fn main() {
     // Дефолт-фильтр: info + глушим крипто/WS-крейсы. RUST_LOG=debug/trace перекрывает.
     // RUST_LOG=trace раскрывает заголовки (Authorization) и Identify-фрейм — не для реальных сессий.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(
-        "info,hyper=warn,tungstenite=warn,rustls=warn",
-    ))
+    env_logger::Builder::from_env(
+        env_logger::Env::default()
+            .default_filter_or("info,hyper=warn,tungstenite=warn,rustls=warn"),
+    )
     .init();
 
     // Явно фиксируем криптопровайдер rustls: иначе первое WS-подключение паникует,

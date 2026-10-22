@@ -179,17 +179,10 @@ async fn discord_get(token: &str, url: &str) -> Result<serde_json::Value, String
         .header("Authorization", token)
         .send()
         .await
-        .map_err(|e| {
-            crate::i18n::f(
-                crate::i18n::Key::RequestFailed,
-                &[("e", &e.to_string())],
-            )
-        })?
+        .map_err(|e| crate::i18n::f(crate::i18n::Key::RequestFailed, &[("e", &e.to_string())]))?
         .json()
         .await
-        .map_err(|e| {
-            crate::i18n::f(crate::i18n::Key::JsonParse, &[("e", &e.to_string())])
-        })
+        .map_err(|e| crate::i18n::f(crate::i18n::Key::JsonParse, &[("e", &e.to_string())]))
 }
 
 /// POST JSON с bearer-токеном.
@@ -204,17 +197,10 @@ async fn discord_post_json(
         .json(body)
         .send()
         .await
-        .map_err(|e| {
-            crate::i18n::f(
-                crate::i18n::Key::RequestFailed,
-                &[("e", &e.to_string())],
-            )
-        })?
+        .map_err(|e| crate::i18n::f(crate::i18n::Key::RequestFailed, &[("e", &e.to_string())]))?
         .json()
         .await
-        .map_err(|e| {
-            crate::i18n::f(crate::i18n::Key::JsonParse, &[("e", &e.to_string())])
-        })
+        .map_err(|e| crate::i18n::f(crate::i18n::Key::JsonParse, &[("e", &e.to_string())]))
 }
 
 /// Сообщение API об ошибке, если ответ не массив.
@@ -224,7 +210,9 @@ fn api_error(resp: &serde_json::Value) -> String {
         &[
             (
                 "message",
-                resp["message"].as_str().unwrap_or(crate::i18n::t(crate::i18n::Key::Unknown)),
+                resp["message"]
+                    .as_str()
+                    .unwrap_or(crate::i18n::t(crate::i18n::Key::Unknown)),
             ),
             ("code", &resp["code"].as_u64().unwrap_or(0).to_string()),
         ],
@@ -232,10 +220,10 @@ fn api_error(resp: &serde_json::Value) -> String {
 }
 
 #[command]
-pub async fn get_guilds(
-    state: State<'_, DiscordState>,
-) -> Result<Vec<Guild>, String> {
-    let token = state.token().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
+pub async fn get_guilds(state: State<'_, DiscordState>) -> Result<Vec<Guild>, String> {
+    let token = state
+        .token()
+        .ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
     let resp = discord_get(&token, &format!("{API_BASE}/users/@me/guilds")).await?;
 
     let mut guilds = Vec::new();
@@ -258,12 +246,10 @@ pub async fn get_channels(
     state: State<'_, DiscordState>,
     guild_id: String,
 ) -> Result<Vec<Channel>, String> {
-    let token = state.token().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
-    let resp = discord_get(
-        &token,
-        &format!("{API_BASE}/guilds/{guild_id}/channels"),
-    )
-    .await?;
+    let token = state
+        .token()
+        .ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
+    let resp = discord_get(&token, &format!("{API_BASE}/guilds/{guild_id}/channels")).await?;
 
     let mut channels = Vec::new();
     if let Some(arr) = resp.as_array() {
@@ -286,7 +272,9 @@ pub async fn get_guild_roles(
     state: State<'_, DiscordState>,
     guild_id: String,
 ) -> Result<Vec<Role>, String> {
-    let token = state.token().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
+    let token = state
+        .token()
+        .ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
     let resp = discord_get(&token, &format!("{API_BASE}/guilds/{guild_id}/roles")).await?;
 
     let mut out = Vec::new();
@@ -333,7 +321,9 @@ pub async fn get_messages(
     state: State<'_, DiscordState>,
     channel_id: String,
 ) -> Result<Vec<ChatMessage>, String> {
-    let token = state.token().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
+    let token = state
+        .token()
+        .ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
     let resp = discord_get(
         &token,
         &format!("{API_BASE}/channels/{channel_id}/messages?limit=50"),
@@ -354,7 +344,10 @@ pub async fn get_messages(
     }
     // API возвращает новые→старые; реверсим для отображения
     out.reverse();
-    log::debug!("get_messages: channel={channel_id} отдано {} шт.", out.len());
+    log::debug!(
+        "get_messages: channel={channel_id} отдано {} шт.",
+        out.len()
+    );
     Ok(out)
 }
 
@@ -364,7 +357,9 @@ pub async fn send_message(
     channel_id: String,
     content: String,
 ) -> Result<ChatMessage, String> {
-    let token = state.token().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
+    let token = state
+        .token()
+        .ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
     let resp = discord_post_json(
         &token,
         &format!("{API_BASE}/channels/{channel_id}/messages"),
@@ -389,12 +384,7 @@ pub fn open_url(url: String) -> Result<(), String> {
         .arg(&url)
         .spawn()
         .map(|_| ())
-        .map_err(|e| {
-            crate::i18n::f(
-                crate::i18n::Key::OpenUrlFailed,
-                &[("e", &e.to_string())],
-            )
-        })
+        .map_err(|e| crate::i18n::f(crate::i18n::Key::OpenUrlFailed, &[("e", &e.to_string())]))
 }
 
 #[cfg(test)]

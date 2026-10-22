@@ -58,6 +58,7 @@ pub enum Key {
     OAuthHttp,
     OAuthSuccess,
     OAuthReturn,
+    OAuthBadState,
     TokenParse,
     UserRequest,
     UserParse,
@@ -158,6 +159,11 @@ pub fn t(key: Key) -> &'static str {
 
         (Lang::Ru, Key::OAuthReturn) => "Вернитесь в приложение.",
         (Lang::En, Key::OAuthReturn) => "Return to the app.",
+
+        (Lang::Ru, Key::OAuthBadState) =>
+            "Ссылка входа недействительна или устарела (state не совпал). Вернитесь в приложение и попробуйте снова.",
+        (Lang::En, Key::OAuthBadState) =>
+            "This sign-in link is invalid or expired (state mismatch). Return to the app and try again.",
 
         (Lang::Ru, Key::TokenParse) => "Не удалось разобрать токен-ответ: {e}",
         (Lang::En, Key::TokenParse) => "Failed to parse the token response: {e}",

@@ -47,9 +47,14 @@ window.addEventListener('resize', fitCanvasToStage);
 function attachVideoChannel(): void {
   const channel = new Channel<ArrayBuffer>();
   channel.onmessage = (buf) => {
+    // Валидация буфера: < 8 байт — DataView бросит RangeError прямо
+    // в обработчике канала; 0 / гигантские размеры — мусор от битого
+    // кадра, canvas.width на такой значения — фриз/распухание DOM.
+    if (buf.byteLength <= 8) return;
     const view = new DataView(buf);
     const width = view.getUint32(0, true);
     const height = view.getUint32(4, true);
+    if (width === 0 || height === 0 || width > 8192 || height > 8192) return;
     drawJpegFrame(width, height, buf.slice(8));
   };
   invoke('stream_video_attach', { channel }).catch((e) => {

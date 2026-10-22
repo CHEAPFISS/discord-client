@@ -22,6 +22,16 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
+/** Экранирование СЫРОЙ строки для вставки в HTML-атрибут (href): escapeHtml
+ *  не трогает кавычки, а embed-URL приходит из API как есть. */
+function escapeAttr(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 // Упоминание <@id> → «@ник»: имя берём из списка участников сервера; цвет —
 // CSS-переменные --mention-* (настраиваются в одной точке).
 function mentionHtml(id: string): string {
@@ -100,7 +110,7 @@ function embedNode(e: Embed): HTMLElement {
     const t = escapeHtml(e.title);
     parts.push(
       e.url
-        ? `<a class="embed-title" href="${e.url.replace(/"/g, '%22')}">${t}</a>`
+        ? `<a class="embed-title" href="${escapeAttr(e.url)}">${t}</a>`
         : `<div class="embed-title">${t}</div>`,
     );
   }
@@ -220,7 +230,26 @@ function avatarNode(msg: ChatMessage): HTMLElement {
   return av;
 }
 
+// Дедуп рендера: своё сообщение приходит ДВАЖДЫ — ответом HTTP (sendMessage)
+// и событием Gateway (MESSAGE_CREATE). Держим недавние id, чтобы не рисовать
+// копию; набор ограничен (хранит порядок вставки — вытесняем старые).
+const renderedIds = new Set<string>();
+const RENDERED_IDS_MAX = 500;
+
+function rememberRendered(id: string): boolean {
+  if (!id) return true; // id нет — дедуплицировать нечем
+  if (renderedIds.has(id)) return false;
+  renderedIds.add(id);
+  while (renderedIds.size > RENDERED_IDS_MAX) {
+    const oldest = renderedIds.values().next().value;
+    if (oldest === undefined) break;
+    renderedIds.delete(oldest);
+  }
+  return true;
+}
+
 function renderMessage(msg: ChatMessage, opts: { live?: boolean } = {}): void {
+  if (!rememberRendered(msg.id)) return;
   const messagesEl = el('messages');
   // Убираем заглушку "пусто" при первом сообщении
   const existingEmpty = messagesEl.querySelector('.messages-empty');
@@ -279,6 +308,9 @@ function renderMessage(msg: ChatMessage, opts: { live?: boolean } = {}): void {
 }
 
 function clearMessages(): void {
+  // История канала перерисовывается с нуля — сбрасываем и дедуп-id,
+  // иначе при повторном открытии канала история не отрисуется.
+  renderedIds.clear();
   const messagesEl = el('messages');
   messagesEl.innerHTML = '';
   const empty = document.createElement('div');
@@ -366,6 +398,16 @@ export function initChatInput(): void {
       e.preventDefault();
       void api.openUrl(link.href).catch(() => {});
     }
+  });
+
+  // Средняя кнопка мыши: без перехвата WebKit пытается открыть ссылку
+  // новой вкладкой ВНУТРИ вебвью — открываем в системном браузере.
+  messagesEl.addEventListener('auxclick', (e) => {
+    if (e.button !== 1) return;
+    const link = (e.target as HTMLElement).closest('a[href]') as HTMLAnchorElement | null;
+    if (!link) return;
+    e.preventDefault();
+    void api.openUrl(link.href).catch(() => {});
   });
 
   messageInput.addEventListener('input', () => {

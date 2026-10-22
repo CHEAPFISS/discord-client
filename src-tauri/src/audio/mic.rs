@@ -46,11 +46,13 @@ impl MicSource {
             .supported_input_configs()
             .map_err(|e| e.to_string())?
         {
-            if range.sample_format() == cpal::SampleFormat::F32 && range.channels() == 1 {
-                if range.min_sample_rate().0 <= 48000 && 48000 <= range.max_sample_rate().0 {
-                    chosen = Some(range.with_sample_rate(cpal::SampleRate(48000)));
-                    break 'cfg;
-                }
+            if range.sample_format() == cpal::SampleFormat::F32
+                && range.channels() == 1
+                && range.min_sample_rate().0 <= 48000
+                && 48000 <= range.max_sample_rate().0
+            {
+                chosen = Some(range.with_sample_rate(cpal::SampleRate(48000)));
+                break 'cfg;
             }
         }
         let config = chosen
@@ -111,7 +113,7 @@ impl MicSource {
                         drop(guard);
 
                         encoded_i += 1;
-                        if encoded_i % 250 == 0 {
+                        if encoded_i.is_multiple_of(250) {
                             log::debug!(
                                 "Микрофон: закодировано {encoded_i} кадров, в кольце {ring_left} сэмплов"
                             );
@@ -125,7 +127,7 @@ impl MicSource {
                             let mut dn_in = [0.0f32; DenoiseState::FRAME_SIZE];
                             let mut dn_out = [0.0f32; DenoiseState::FRAME_SIZE];
                             for chunk in
-                                mono.chunks_exact_mut(DenoiseState::FRAME_SIZE)
+                                mono.as_chunks_mut::<{ DenoiseState::FRAME_SIZE }>().0
                             {
                                 for (d, s) in dn_in.iter_mut().zip(chunk.iter()) {
                                     *d = s * 32768.0;
@@ -202,6 +204,18 @@ impl MicSource {
                 })?;
         }
 
+        // Encode-поток уже запущен, а Self ещё не построен: на любой ранней
+        // ошибке гасим его сами — иначе Drop не сработает и поток ждёт кольцо
+        // вечно (ретрай каждые 5 с плодил бы такие потоки).
+        let stop_encode = {
+            let stop_flag = stop_flag.clone();
+            let ring_cv = ring_cv.clone();
+            move || {
+                stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                ring_cv.notify_all();
+            }
+        };
+
         // cpal::Stream не Send: его нельзя ни перенести в другой поток, ни
         // безопасно держать в MicSource (unsafe impl Send был убран — это UB
         // на части платформ). Поток записи создаётся и умирает в своём
@@ -211,59 +225,72 @@ impl MicSource {
             let ring = ring.clone();
             let ring_cv = ring_cv.clone();
             let stop_flag = stop_flag.clone();
-            std::thread::Builder::new()
-                .name("mic-stream".into())
-                .spawn(move || {
-                    let result = device
-                        .build_input_stream(
-                            &config,
-                            {
-                                let ring_cb = ring.clone();
-                                let ring_cv_cb = ring_cv.clone();
-                                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                                    let mut ring = ring_cb.lock().unwrap();
-                                    for &s in data {
-                                        ring.push_back(s);
-                                        while ring.len() > MIC_RING_MAX {
-                                            ring.pop_front();
+            let stream_result =
+                std::thread::Builder::new()
+                    .name("mic-stream".into())
+                    .spawn(move || {
+                        let result = device
+                            .build_input_stream(
+                                &config,
+                                {
+                                    let ring_cb = ring.clone();
+                                    let ring_cv_cb = ring_cv.clone();
+                                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                                        let mut ring = ring_cb.lock().unwrap();
+                                        for &s in data {
+                                            ring.push_back(s);
+                                            while ring.len() > MIC_RING_MAX {
+                                                ring.pop_front();
+                                            }
                                         }
+                                        // Будим рабочий поток — он сам решит, накопился ли кадр,
+                                        // и затем разбудит пасер oto (контракт FrameSource).
+                                        ring_cv_cb.notify_all();
                                     }
-                                    // Будим рабочий поток — он сам решит, накопился ли кадр,
-                                    // и затем разбудит пасер oto (контракт FrameSource).
-                                    ring_cv_cb.notify_all();
+                                },
+                                move |err| log::warn!("cpal input stream error: {err}"),
+                                None,
+                            )
+                            .map_err(|e| format!("cpal open input stream: {e}"))
+                            .and_then(|s| {
+                                s.play().map_err(|e| format!("cpal input play: {e}"))?;
+                                Ok(s)
+                            });
+                        match result {
+                            Ok(stream) => {
+                                let _ = ready_tx.send(Ok(()));
+                                // Держим поток живым до stop_flag (MicSource::drop + notify).
+                                let mut guard = ring.lock().unwrap();
+                                while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                                    guard = ring_cv.wait(guard).unwrap();
                                 }
-                            },
-                            move |err| log::warn!("cpal input stream error: {err}"),
-                            None,
-                        )
-                        .map_err(|e| format!("cpal open input stream: {e}"))
-                        .and_then(|s| {
-                            s.play().map_err(|e| format!("cpal input play: {e}"))?;
-                            Ok(s)
-                        });
-                    match result {
-                        Ok(stream) => {
-                            let _ = ready_tx.send(Ok(()));
-                            // Держим поток живым до stop_flag (MicSource::drop + notify).
-                            let mut guard = ring.lock().unwrap();
-                            while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                                guard = ring_cv.wait(guard).unwrap();
+                                drop(guard);
+                                drop(stream); // drop здесь же, на потоке создания
                             }
-                            drop(guard);
-                            drop(stream); // drop здесь же, на потоке создания
+                            Err(e) => {
+                                let _ = ready_tx.send(Err(e));
+                            }
                         }
-                        Err(e) => {
-                            let _ = ready_tx.send(Err(e));
-                        }
-                    }
-                })
-                .map_err(|e| {
-                    crate::i18n::f(crate::i18n::Key::MicStreamTask, &[("e", &e.to_string())])
-                })?;
+                    });
+            if let Err(e) = stream_result {
+                stop_encode();
+                return Err(crate::i18n::f(
+                    crate::i18n::Key::MicStreamTask,
+                    &[("e", &e.to_string())],
+                ));
+            }
         }
-        ready_rx
-            .recv()
-            .map_err(|_| crate::i18n::t(crate::i18n::Key::MicStreamEnded).to_string())??;
+        match ready_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                stop_encode();
+                return Err(e);
+            }
+            Err(_) => {
+                stop_encode();
+                return Err(crate::i18n::t(crate::i18n::Key::MicStreamEnded).to_string());
+            }
+        }
 
         Ok(Self {
             encoded,

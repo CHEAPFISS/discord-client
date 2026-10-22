@@ -20,13 +20,12 @@ use tokio::sync::mpsc;
 /// Дрейф часов: consumed — колбэк (локальный DAC), produced — декод (RTP).
 /// При N одновременно говорящих produced ≈ N×consumed, отрицательный сдвиг
 /// drift'а при миксе — норма; смысл метрики — при одиночном говорящем.
-pub(crate) async fn play_audio_task(
-    rx: mpsc::Receiver<(u64, Vec<u8>, u8)>,
-) -> Result<(), String> {
-    let handle = tokio::task::spawn_blocking(move || -> Result<(), String> {
-        play_audio_blocking(rx)
-    });
-    handle.await.map_err(|e| format!("join playback task: {e}"))?
+pub(crate) async fn play_audio_task(rx: mpsc::Receiver<(u64, Vec<u8>, u8)>) -> Result<(), String> {
+    let handle =
+        tokio::task::spawn_blocking(move || -> Result<(), String> { play_audio_blocking(rx) });
+    handle
+        .await
+        .map_err(|e| format!("join playback task: {e}"))?
 }
 
 /// Очередь воспроизведения одного участника.
@@ -41,9 +40,7 @@ struct UserPlayback {
     played_total: u64,
 }
 
-fn play_audio_blocking(
-    mut rx: mpsc::Receiver<(u64, Vec<u8>, u8)>,
-) -> Result<(), String> {
+fn play_audio_blocking(mut rx: mpsc::Receiver<(u64, Vec<u8>, u8)>) -> Result<(), String> {
     // Декодер на КАЖДОГО участника: libopus хранит PLC/фазовое состояние,
     // общим кодеком кадры разных говорящих давали «булькание» при сменах.
     let mut decoders: HashMap<u64, Decoder> = HashMap::new();
@@ -62,19 +59,21 @@ fn play_audio_blocking(
         .supported_output_configs()
         .map_err(|e| e.to_string())?
     {
-        if range.sample_format() == cpal::SampleFormat::F32 && range.channels() == 2 {
-            if range.min_sample_rate().0 <= 48000 && 48000 <= range.max_sample_rate().0 {
-                chosen = Some(range.with_sample_rate(cpal::SampleRate(48000)).config());
-                break 'ranges;
-            }
+        if range.sample_format() == cpal::SampleFormat::F32
+            && range.channels() == 2
+            && range.min_sample_rate().0 <= 48000
+            && 48000 <= range.max_sample_rate().0
+        {
+            chosen = Some(range.with_sample_rate(cpal::SampleRate(48000)).config());
+            break 'ranges;
         }
     }
     let config = chosen.unwrap_or_else(|| {
         device
             .default_output_config()
             .ok()
-            .and_then(|d| Some(d.config()))
-            .expect(crate::i18n::t(crate::i18n::Key::NoOutputConfig))
+            .map(|d| d.config())
+            .unwrap_or_else(|| panic!("{}", crate::i18n::t(crate::i18n::Key::NoOutputConfig)))
     });
     if config.sample_rate.0 != 48000 || config.channels != 2 {
         log::warn!(
@@ -82,11 +81,10 @@ fn play_audio_blocking(
             config
         );
     }
-    let config: cpal::StreamConfig = config.into();
+    let config: cpal::StreamConfig = config;
 
     // Очереди воспроизведения участников: у каждой своя, суммирование в колбэке.
-    let out_map: Arc<Mutex<HashMap<u64, UserPlayback>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let out_map: Arc<Mutex<HashMap<u64, UserPlayback>>> = Arc::new(Mutex::new(HashMap::new()));
     let map_clone = out_map.clone();
     let underruns = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
@@ -157,19 +155,17 @@ fn play_audio_blocking(
 
     let mut pcm = vec![0.0f32; 5760 * 2]; // максимум кадра Opus (120 мс) × 2 канала
     let silent_slot = vec![0.0f32; 960 * 2]; // 20 мс стерео — для дыры без FEC
-    // Декодированное уходит в ОЧЕРЕДЬ УЧАСТНИКА (суммирование — в колбэке).
-    // Кап 2 с на участника — аварийный (от операции в двух секундах от
-    // молчащего колонка убегать нечем: гнать с головы).
+                                             // Декодированное уходит в ОЧЕРЕДЬ УЧАСТНИКА (суммирование — в колбэке).
+                                             // Кап 2 с на участника — аварийный (от операции в двух секундах от
+                                             // молчащего колонка убегать нечем: гнать с головы).
     let enqueue = |uid: u64, samples: &[f32]| {
         let mut users = out_map.lock().unwrap();
-        let up = users
-            .entry(uid)
-            .or_insert_with(|| UserPlayback {
-                samples: VecDeque::new(),
-                started: false,
-                enq_total: 0,
-                played_total: 0,
-            });
+        let up = users.entry(uid).or_insert_with(|| UserPlayback {
+            samples: VecDeque::new(),
+            started: false,
+            enq_total: 0,
+            played_total: 0,
+        });
         up.samples.extend(samples.iter().copied());
         up.enq_total += samples.len() as u64;
         while up.samples.len() > 48000 * 2 * 2 {

@@ -54,6 +54,41 @@ pub struct StreamDecoder {
     last_encode_us: u64,
 }
 
+/// Сверка ABI версии загруженной libopenh264 ПОСЛЕ непроверенной загрузки
+/// (ревью: «unchecked soname»). Биндинги openh264-sys2 0.9 сгенерированы под
+/// openh264 2.6.x: vtable интерфейсов другой версии дал бы UB, поэтому
+/// сверяем версию через стабильный C-API до первого вызова декодера.
+fn check_openh264_abi(api: &OpenH264API) -> Result<(), String> {
+    // Фича `source` у нас выключена — вариант один; else оставлен на случай
+    // её включения.
+    #[allow(irrefutable_let_patterns)]
+    let OpenH264API::Libloading(loader) = api
+    else {
+        return Err("openh264: ожидалась libloading-загрузка API".to_string());
+    };
+    let get_ver = loader
+        .WelsGetCodecVersion
+        .as_ref()
+        .map_err(|e| format!("openh264: нет символа WelsGetCodecVersion: {e}"))?;
+    // SAFETY: вызов без аргументов возвращает POD-структуру версии; символ
+    // экспортируется всеми версиями openh264 (часть стабильного C-API).
+    let v = unsafe { (*get_ver)() };
+    if v.uMajor == 2 && v.uMinor == 6 {
+        log::info!(
+            "openh264: ABI {}.{}.{} — версия совместима с биндингами",
+            v.uMajor,
+            v.uMinor,
+            v.uRevision
+        );
+        Ok(())
+    } else {
+        Err(format!(
+            "libopenh264 {}.{}.{} — биндинги ожидают 2.6.x (несовпадение ABI = UB)",
+            v.uMajor, v.uMinor, v.uRevision
+        ))
+    }
+}
+
 impl StreamDecoder {
     pub fn new() -> Result<Self, String> {
         // Системная libopenh264 (Arch: собрана с ассемблером и оптимизациями
@@ -70,14 +105,24 @@ impl StreamDecoder {
             "libopenh264.so.8",
             "libopenh264.so",
         ] {
-            // SAFETY: загружаем системную библиотеку с ожидаемым API openh264;
-            // несовпадение версии может дать UB (приемлемо для локального
-            // клиента — путь фиксирован на пакет Arch openh264).
+            // 1) Официальные бинари Cisco сверяются openh264-sys2 по SHA-256
+            //    (well-known hashes) — без сюрпризов с версией.
+            if let Ok(a) = OpenH264API::from_blob_path(path) {
+                api = Some(a);
+                break;
+            }
+            // 2) Дистрибутивные пакеты (Arch пересобирает openh264, SHA чужой):
+            //    грузим unchecked, но версию ABI СВЕРЯЕМ сами до первого вызова —
+            //    иначе vtable другой версии = UB (ревью: unchecked soname).
+            // SAFETY: путь фиксирован, сверка версии ниже.
             match unsafe { OpenH264API::from_blob_path_unchecked(path) } {
-                Ok(a) => {
-                    api = Some(a);
-                    break;
-                }
+                Ok(a) => match check_openh264_abi(&a) {
+                    Ok(()) => {
+                        api = Some(a);
+                        break;
+                    }
+                    Err(e) => last_err = format!("{path}: {e}"),
+                },
                 Err(e) => last_err = format!("{path}: {e}"),
             }
         }
@@ -148,6 +193,14 @@ impl StreamDecoder {
         let (w, h) = yuv.dimensions();
         if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 {
             // Нечётные размеры несовместимы с 4:2:0 — пропускаем кадр.
+            return Ok(None);
+        }
+        // Лимит разрешения ДО аллокаций: битый/враждебный SPS может назвать
+        // гигантские размеры — jpeg_buf и dst-образы аллоцировались бы под
+        // сотни МБ на кадр (OOM/фриз) (ревью).
+        const MAX_DIM: usize = 8192;
+        if w > MAX_DIM || h > MAX_DIM {
+            log::warn!("Stream decoder: кадр отклонён — {w}x{h} больше лимита {MAX_DIM}");
             return Ok(None);
         }
         let strides = yuv.strides();
@@ -268,8 +321,8 @@ impl StreamDecoder {
 
 /// Целевой размер даунскейла: ровно 2/3, всегда чётный (4:2:0).
 fn scale_2_3(w: usize, h: usize) -> (u32, u32) {
-    let mut dw = w * 2 / 3 & !1;
-    let mut dh = h * 2 / 3 & !1;
+    let mut dw = (w * 2 / 3) & !1;
+    let mut dh = (h * 2 / 3) & !1;
     if dw < 2 {
         dw = 2;
     }

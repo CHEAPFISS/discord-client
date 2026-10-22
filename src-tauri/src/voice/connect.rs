@@ -2,9 +2,9 @@ use serde_json::json;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager};
 
-use discord_client::DiscordState;
 use crate::audio::playback::play_audio_task;
 use crate::voice::{attach_mic_task, clear_speaking, request_voice_rejoin};
+use discord_client::DiscordState;
 
 /// Голосовое подключение Discord через oto: Voice Gateway v8 + DAVE (E2EE) + RTP.
 ///
@@ -32,8 +32,12 @@ pub(crate) async fn connect_voice(
             .parse::<u64>()
             .map_err(|e| format!("user_id: {e}"))?
     };
-    let guild = guild_ids.parse::<u64>().map_err(|e| format!("guild_id: {e}"))?;
-    let channel = channel_ids.parse::<u64>().map_err(|e| format!("channel_id: {e}"))?;
+    let guild = guild_ids
+        .parse::<u64>()
+        .map_err(|e| format!("guild_id: {e}"))?;
+    let channel = channel_ids
+        .parse::<u64>()
+        .map_err(|e| format!("channel_id: {e}"))?;
     let endpoint = endpoint_in.trim().trim_start_matches("wss://").to_string();
 
     // Цель могла смениться/сняться, пока задача стояла в очереди (leave, новый join,
@@ -49,7 +53,10 @@ pub(crate) async fn connect_voice(
                 return Ok(());
             }
             Some(v) if v.channel_id != channel_ids => {
-                log::info!("Voice connect отменён: цель сменилась на канал {}", v.channel_id);
+                log::info!(
+                    "Voice connect отменён: цель сменилась на канал {}",
+                    v.channel_id
+                );
                 return Ok(());
             }
             _ => {}
@@ -62,8 +69,10 @@ pub(crate) async fn connect_voice(
         match slot.conn.as_ref() {
             Some(c) => {
                 let ph = c.state().phase();
-                let terminal =
-                    matches!(ph, oto::ConnectionPhase::Failed | oto::ConnectionPhase::Closed);
+                let terminal = matches!(
+                    ph,
+                    oto::ConnectionPhase::Failed | oto::ConnectionPhase::Closed
+                );
                 !terminal
                     && slot.session_id.as_deref() == Some(session_id.as_str())
                     && slot.token.as_deref() == Some(token.as_str())
@@ -96,14 +105,12 @@ pub(crate) async fn connect_voice(
         slot.session_id = Some(session_id.clone());
         slot.token = Some(token.clone());
         let prev = slot.conn.take();
-        let alive = prev
-            .as_ref()
-            .is_some_and(|p| {
-                !matches!(
-                    p.state().phase(),
-                    oto::ConnectionPhase::Failed | oto::ConnectionPhase::Closed
-                )
-            });
+        let alive = prev.as_ref().is_some_and(|p| {
+            !matches!(
+                p.state().phase(),
+                oto::ConnectionPhase::Failed | oto::ConnectionPhase::Closed
+            )
+        });
         if !alive {
             slot.pump_spawned = false; // мёртвое/новое соединение — насос заводим заново
         }
@@ -126,7 +133,10 @@ pub(crate) async fn connect_voice(
                     state.voice_conn.lock().unwrap().session_id = None;
                     state.voice_conn.lock().unwrap().token = None;
                     let _ = p.shutdown().await;
-                    if matches!(e.retry_disposition(), oto::RetryDisposition::NeedsFreshVoiceInfo) {
+                    if matches!(
+                        e.retry_disposition(),
+                        oto::RetryDisposition::NeedsFreshVoiceInfo
+                    ) {
                         request_voice_rejoin(&app, &state);
                     }
                     return Err(format!("oto replace_voice_info: {e}"));
@@ -138,13 +148,18 @@ pub(crate) async fn connect_voice(
             // Старый sender принадлежал мёртвому конну — сбрасываем.
             state.mic_sender.lock().unwrap().take();
             let _ = p.shutdown().await;
-            let oto = oto::Oto::builder().build().map_err(|e| format!("oto init: {e}"))?;
+            let oto = oto::Oto::builder()
+                .build()
+                .map_err(|e| format!("oto init: {e}"))?;
             match oto.connect(info).await {
                 Ok(c) => c,
                 Err(e) => {
                     state.voice_conn.lock().unwrap().session_id = None;
                     state.voice_conn.lock().unwrap().token = None;
-                    if matches!(e.retry_disposition(), oto::RetryDisposition::NeedsFreshVoiceInfo) {
+                    if matches!(
+                        e.retry_disposition(),
+                        oto::RetryDisposition::NeedsFreshVoiceInfo
+                    ) {
                         request_voice_rejoin(&app, &state);
                     }
                     return Err(format!("oto connect: {e}"));
@@ -154,13 +169,18 @@ pub(crate) async fn connect_voice(
         None => {
             // Начисто: прежнего соединения не было — слот микрофона тоже пуст.
             state.mic_sender.lock().unwrap().take();
-            let oto = oto::Oto::builder().build().map_err(|e| format!("oto init: {e}"))?;
+            let oto = oto::Oto::builder()
+                .build()
+                .map_err(|e| format!("oto init: {e}"))?;
             match oto.connect(info).await {
                 Ok(c) => c,
                 Err(e) => {
                     state.voice_conn.lock().unwrap().session_id = None;
                     state.voice_conn.lock().unwrap().token = None;
-                    if matches!(e.retry_disposition(), oto::RetryDisposition::NeedsFreshVoiceInfo) {
+                    if matches!(
+                        e.retry_disposition(),
+                        oto::RetryDisposition::NeedsFreshVoiceInfo
+                    ) {
                         request_voice_rejoin(&app, &state);
                     }
                     return Err(format!("oto connect: {e}"));
@@ -172,7 +192,10 @@ pub(crate) async fn connect_voice(
     state.voice_rejoin.store(0, Ordering::SeqCst);
 
     let phase = conn.state().phase();
-    log::info!("Voice (oto) готово: phase={phase:?} rtt={:?}", conn.state().gateway_rtt());
+    log::info!(
+        "Voice (oto) готово: phase={phase:?} rtt={:?}",
+        conn.state().gateway_rtt()
+    );
 
     state.voice_conn.lock().unwrap().conn = Some(conn.clone());
     let _ = app.emit("voice_status", json!({"status": "connected"}));
@@ -185,18 +208,26 @@ pub(crate) async fn connect_voice(
         slot.pump_spawned = true;
         need
     };
-    // Канал входящих Opus-кадров (уже расшифрованных oto: user_id отфильтровано криптографически).
-    // user_id едет с кадром: у каждого участника — свой opus-декодер (общий
-    // кодек путал состояние и давал «булькание» при смене говорящих).
-    let (audio_tx, audio_rx) = tokio::sync::mpsc::channel::<(u64, Vec<u8>, u8)>(256);
-    // Общий sender в состояние: звук стрима (второй RTC-коннект) играет через
-    // ТОТ ЖЕ mixer — второй аудио-прибор дал бы конфликт/двойной звук.
-    *state.playback_tx.lock().unwrap() = Some(audio_tx.clone());
-    tokio::spawn(async move {
-        if let Err(e) = play_audio_task(audio_rx).await {
-            log::warn!("Voice playback: {e}");
+    // Один playback-микшер на всю голосовую сессию: voice и стрим играют через
+    // ЕДИНСТВЕННЫЙ cpal-выход. Раньше блок выполнялся на КАЖДЫЙ replace_voice_info:
+    // старый sender переживал бы живой насос и держал мёртвый микшер (открытый
+    // cpal-стрим, декодеры, буфер до 2 с) до самого leave, а звук разъезжался по
+    // двум микшерам. is_closed(): таск мог умереть (нет звукового устройства) —
+    // тогда заводим новый.
+    {
+        let mut slot = state.playback_tx.lock().unwrap();
+        if slot.as_ref().is_none_or(|tx| tx.is_closed()) {
+            // user_id едет с кадром: у каждого участника — свой opus-декодер
+            // (общий кодек путал состояние и давал «булькание» при смене говорящих).
+            let (audio_tx, audio_rx) = tokio::sync::mpsc::channel::<(u64, Vec<u8>, u8)>(256);
+            *slot = Some(audio_tx);
+            tokio::spawn(async move {
+                if let Err(e) = play_audio_task(audio_rx).await {
+                    log::warn!("Voice playback: {e}");
+                }
+            });
         }
-    });
+    }
 
     if need_pump {
         let pump_app = app.clone();
@@ -257,8 +288,9 @@ pub(crate) async fn connect_voice(
                         }
                         let (status, err) = match phase {
                             oto::ConnectionPhase::Connected => ("connected", None),
-                            oto::ConnectionPhase::Resuming
-                            | oto::ConnectionPhase::Reconnecting => ("reconnecting", None),
+                            oto::ConnectionPhase::Resuming | oto::ConnectionPhase::Reconnecting => {
+                                ("reconnecting", None)
+                            }
                             oto::ConnectionPhase::NeedsFreshVoiceInfo => ("needs_fresh", None),
                             oto::ConnectionPhase::Closed => ("left", None),
                             oto::ConnectionPhase::Failed => {
@@ -273,71 +305,98 @@ pub(crate) async fn connect_voice(
                         let _ = pump_app.emit("voice_status", payload);
                     }
                     oto::ConnectionEvent::Failure(f) => {
-                    log::warn!(
-                        "Voice (oto) failure: op={:?} kind={:?} code={:?} retry={:?}",
-                        f.operation(),
-                        f.kind(),
-                        f.safe_code(),
-                        f.retry_disposition()
-                    );
-                    // NeedsFreshVoiceInfo mid-session: соединение ждёт свежую пару —
-                    // сами запрашиваем re-join (op 4), иначе голос висит навсегда.
-                    if matches!(f.retry_disposition(), oto::RetryDisposition::NeedsFreshVoiceInfo) {
-                        request_voice_rejoin(&pump_app, &pump_state);
-                        let _ = pump_app.emit("voice_status", json!({"status": "joining"}));
-                    } else {
-                        let _ = pump_app.emit(
+                        log::warn!(
+                            "Voice (oto) failure: op={:?} kind={:?} code={:?} retry={:?}",
+                            f.operation(),
+                            f.kind(),
+                            f.safe_code(),
+                            f.retry_disposition()
+                        );
+                        // NeedsFreshVoiceInfo mid-session: соединение ждёт свежую пару —
+                        // сами запрашиваем re-join (op 4), иначе голос висит навсегда.
+                        if matches!(
+                            f.retry_disposition(),
+                            oto::RetryDisposition::NeedsFreshVoiceInfo
+                        ) {
+                            request_voice_rejoin(&pump_app, &pump_state);
+                            let _ = pump_app.emit("voice_status", json!({"status": "joining"}));
+                        } else {
+                            let _ = pump_app.emit(
                             "voice_status",
                             json!({"status": "error", "error": format!("{:?}/{:?}", f.operation(), f.kind())}),
                         );
+                        }
                     }
-                }
-                oto::ConnectionEvent::Closed(_) => {
-                    clear_speaking(&pump_app, &pump_state);
-                    let _ = pump_app.emit("voice_status", json!({"status": "left"}));
-                    break;
-                }
-                oto::ConnectionEvent::AudioReceived { user_id, opus, missing, .. } => {
-                    // Индикатор «говорит»: кадр пришёл — зажигаем сразу (и при deafen:
-                    // обводка должна жить, даже если звук не доигрываем).
-                    if pump_state.voice_speaking.mark(user_id) {
-                        let _ = pump_app.emit(
-                            "voice_speaking",
-                            json!({"user_id": user_id.to_string(), "speaking": true}),
-                        );
+                    oto::ConnectionEvent::Closed(_) => {
+                        clear_speaking(&pump_app, &pump_state);
+                        let _ = pump_app.emit("voice_status", json!({"status": "left"}));
+                        break;
                     }
-                    // Кадр уже расшифрован oto (автор определён по ratchet'у
-                    // отправителя). По-кадровых логов нет — до 100 кадров/с.
-                    // Deafen: кадры не доигрываем вовсе (без расхода декодера).
-                    if pump_app
-                        .state::<DiscordState>()
-                        .self_deaf
-                        .load(std::sync::atomic::Ordering::Relaxed)
-                    {
-                        continue;
+                    oto::ConnectionEvent::AudioReceived {
+                        user_id,
+                        opus,
+                        missing,
+                        ..
+                    } => {
+                        // Индикатор «говорит»: кадр пришёл — зажигаем сразу (и при deafen:
+                        // обводка должна жить, даже если звук не доигрываем).
+                        if pump_state.voice_speaking.mark(user_id) {
+                            let _ = pump_app.emit(
+                                "voice_speaking",
+                                json!({"user_id": user_id.to_string(), "speaking": true}),
+                            );
+                        }
+                        // Кадр уже расшифрован oto (автор определён по ratchet'у
+                        // отправителя). По-кадровых логов нет — до 100 кадров/с.
+                        // Deafen: кадры не доигрываем вовсе (без расхода декодера).
+                        if pump_app
+                            .state::<DiscordState>()
+                            .self_deaf
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            continue;
+                        }
+                        // Sender берём из состояния на каждый кадр: он единый для сессии
+                        // (микшер не пересоздаётся при replace), а при leave его там None —
+                        // кадр просто отбрасывается, не держим мёртвый клон.
+                        // try_send: полная очередь микшера не должна ОСТАНАВЛИВАТЬ насос
+                        // (он кормит весь поток событий) — кадр дропается, джиттер-буфер
+                        // сам справится.
+                        let tx = pump_state.playback_tx.lock().unwrap().clone();
+                        if let Some(tx) = tx {
+                            let _ = tx.try_send((user_id, opus, missing as u8));
+                        }
                     }
-                    let _ = audio_tx.send((user_id, opus, missing as u8)).await;
-                }
-                oto::ConnectionEvent::DaveStateChanged { opcode, before, after, .. } => {
-                    log::debug!("Voice (oto) DAVE control {opcode}: {before:?} → {after:?}");
-                }
-                oto::ConnectionEvent::DaveWaitingForMembers { timeout_seconds, .. } => {
-                    log::info!("Voice (oto) DAVE: ждёт участников (таймаут {timeout_seconds}s), отправка недоступна");
-                }
-                oto::ConnectionEvent::DaveRecovery { attempt, .. } => {
-                    log::info!("Voice (oto) DAVE: recovery, попытка {attempt}");
-                }
-                oto::ConnectionEvent::DaveControlProcessed {
-                    opcode, transition_id, epoch, ..
-                } => {
-                    log::debug!(
+                    oto::ConnectionEvent::DaveStateChanged {
+                        opcode,
+                        before,
+                        after,
+                        ..
+                    } => {
+                        log::debug!("Voice (oto) DAVE control {opcode}: {before:?} → {after:?}");
+                    }
+                    oto::ConnectionEvent::DaveWaitingForMembers {
+                        timeout_seconds, ..
+                    } => {
+                        log::info!("Voice (oto) DAVE: ждёт участников (таймаут {timeout_seconds}s), отправка недоступна");
+                    }
+                    oto::ConnectionEvent::DaveRecovery { attempt, .. } => {
+                        log::info!("Voice (oto) DAVE: recovery, попытка {attempt}");
+                    }
+                    oto::ConnectionEvent::DaveControlProcessed {
+                        opcode,
+                        transition_id,
+                        epoch,
+                        ..
+                    } => {
+                        log::debug!(
                         "Voice (oto) DAVE control processed: op={opcode} tid={transition_id:?} epoch={epoch:?}"
                     );
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
-        }
-    }); // need_pump
+        }); // need_pump
     } // need_pump
 
     Ok(())

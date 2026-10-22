@@ -1,10 +1,10 @@
 use serde_json::json;
-use tauri::{command, AppHandle, Emitter, Manager, State};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tauri::{command, AppHandle, Emitter, Manager, State};
 
-use discord_client::{DiscordState, GatewaySender};
 use crate::audio::mic::MicSource;
+use discord_client::{DiscordState, GatewaySender};
 
 pub mod connect;
 pub mod stream;
@@ -25,7 +25,11 @@ pub(crate) async fn join_voice_channel(
     // user_id берём из сессии
     let user_id = {
         let guard = state.session.lock().unwrap();
-        guard.as_ref().ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?.user_id.clone()
+        guard
+            .as_ref()
+            .ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?
+            .user_id
+            .clone()
     };
 
     // Повторный клик по каналу, где мы уже в голосе: живое соединение не рвём
@@ -173,7 +177,12 @@ pub(crate) async fn unwatch_stream(
     state: State<'_, DiscordState>,
     sender: State<'_, GatewaySender>,
 ) -> Result<(), String> {
-    let key = state.stream.lock().unwrap().as_ref().map(|t| t.stream_key.clone());
+    let key = state
+        .stream
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|t| t.stream_key.clone());
     if let Some(stream_key) = key {
         let op19 = json!({
             "op": 19,
@@ -243,7 +252,10 @@ pub(crate) async fn set_self_deaf(
     // Deafen в Discord тянет за собой мьют микрофона; un-deaf снимает оба.
     let sender = state.mic_sender.lock().unwrap().clone();
     if let Some(sender) = sender {
-        let _ = sender.set_paused(deaf).await.map_err(|e| format!("deaf mute: {e}"));
+        let _ = sender
+            .set_paused(deaf)
+            .await
+            .map_err(|e| format!("deaf mute: {e}"));
     }
 
     // op 4 — обновить self_mute/self_deaf в голосовом состоянии.
@@ -292,8 +304,7 @@ fn self_speak_hook(app: &AppHandle) -> std::sync::Arc<dyn Fn() + Send + Sync> {
     let deaf_flag = state.self_deaf.clone();
     let app_for_speak = app.clone();
     std::sync::Arc::new(move || {
-        if self_uid == 0 || mute_flag.load(Ordering::Relaxed) || deaf_flag.load(Ordering::Relaxed)
-        {
+        if self_uid == 0 || mute_flag.load(Ordering::Relaxed) || deaf_flag.load(Ordering::Relaxed) {
             return;
         }
         if tracker.mark(self_uid) {
@@ -360,14 +371,9 @@ pub(crate) async fn mic_stats_task(app: AppHandle) {
             // свои 8 попыток и вышел. Пока пользователь в голосовом канале —
             // пробуем снова (не чаще раза в 5 с), иначе после обрыва сети
             // канал останется без микрофона до перезахода.
-            let in_voice = app
-                .state::<DiscordState>()
-                .voice
-                .lock()
-                .unwrap()
-                .is_some();
+            let in_voice = app.state::<DiscordState>().voice.lock().unwrap().is_some();
             if in_voice {
-                let due = last_missing_attach.map_or(true, |t| t.elapsed().as_secs() >= 5);
+                let due = last_missing_attach.is_none_or(|t| t.elapsed().as_secs() >= 5);
                 if due {
                     last_missing_attach = Some(Instant::now());
                     if let Some(conn) = app
@@ -399,9 +405,7 @@ pub(crate) async fn mic_stats_task(app: AppHandle) {
             // Бывший вечный cap («не молотим») молчал ровно с возвратом сети:
             // attach успевал умереть 3 раза за обрыв Wi-Fi, и микрофон
             // оставался мёртвым до перезахода в канал.
-            if fails_in_a_row > 3
-                && now_ms.saturating_sub(last_fail_attempt_ms) < 10_000
-            {
+            if fails_in_a_row > 3 && now_ms.saturating_sub(last_fail_attempt_ms) < 10_000 {
                 continue;
             }
             last_fail_attempt_ms = now_ms;
@@ -434,7 +438,9 @@ pub(crate) async fn mic_stats_task(app: AppHandle) {
                                 tokio::spawn(attach_mic_task(app.clone(), conn));
                             }
                             None => {
-                                log::warn!("Микрофон/пасер: живого соединения нет, переattach отменён")
+                                log::warn!(
+                                    "Микрофон/пасер: живого соединения нет, переattach отменён"
+                                )
                             }
                         }
                         continue;
@@ -532,7 +538,9 @@ pub(crate) fn request_voice_rejoin(app: &AppHandle, state: &DiscordState) {
         .unwrap()
         .as_ref()
         .map(|v| (v.guild_id.clone(), v.channel_id.clone()));
-    let Some((guild_id, channel_id)) = target else { return };
+    let Some((guild_id, channel_id)) = target else {
+        return;
+    };
     // Актуальные флаги вместо жёстких false/false — re-join не должен
     // размьючивать/разглушать (состояние живёт в атомиках, см. set_self_mute).
     let self_mute = state.self_mute.load(Ordering::SeqCst);

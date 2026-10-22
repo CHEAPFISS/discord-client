@@ -95,8 +95,7 @@ pub async fn get_guild_members(
     }
 
     let sender = app.state::<GatewaySender>();
-    let ranges_json: Vec<serde_json::Value> =
-        ranges.iter().map(|(s, e)| json!([s, e])).collect();
+    let ranges_json: Vec<serde_json::Value> = ranges.iter().map(|(s, e)| json!([s, e])).collect();
     let subscribe = json!({
         "op": 37,
         "d": {"subscriptions": {
@@ -139,7 +138,10 @@ pub async fn get_guild_members(
     //    ожидание никогда не завершится).
     let ranges = {
         let mut map = state.member_fetch.fetches.lock().unwrap();
-        if map.get(&guild_id).is_some_and(|cur| Arc::ptr_eq(cur, &slot)) {
+        if map
+            .get(&guild_id)
+            .is_some_and(|cur| Arc::ptr_eq(cur, &slot))
+        {
             map.remove(&guild_id);
         }
         let st = slot.state.lock().unwrap();
@@ -163,7 +165,10 @@ pub async fn get_guild_members(
                 if groups.last().map(|p| p.id == id).unwrap_or(false) {
                     continue; // повторный маркер той же группы (граница диапазона)
                 }
-                groups.push(MemberGroup { id, members: Vec::new() });
+                groups.push(MemberGroup {
+                    id,
+                    members: Vec::new(),
+                });
             } else if let Some(m) = it.get("member") {
                 let info = to_member(m);
                 if info.user_id.is_empty() || !seen_ids.insert(info.user_id.clone()) {
@@ -172,7 +177,10 @@ pub async fn get_guild_members(
                 if groups.is_empty() {
                     // Маркеров групп не встретилось — не теряем участника:
                     // кладём в общую группу (фронт подпишет её «Участники»).
-                    groups.push(MemberGroup { id: String::new(), members: Vec::new() });
+                    groups.push(MemberGroup {
+                        id: String::new(),
+                        members: Vec::new(),
+                    });
                 }
                 groups.last_mut().unwrap().members.push(info);
             }

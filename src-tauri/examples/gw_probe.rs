@@ -28,8 +28,8 @@ async fn main() {
     let mut counts: std::collections::BTreeMap<String, u32> = Default::default();
     let start = Instant::now();
     let mut sent_identify = false;
-    let mut guild_create_seen = 0u32;
-    let mut guild_create_sample: Option<serde_json::Value> = None;
+    let guild_create_seen = 0u32;
+    let guild_create_sample: Option<serde_json::Value> = None;
     let mut next_hb = Instant::now() + hb_interval;
 
     while start.elapsed() < Duration::from_secs(30) {
@@ -43,8 +43,9 @@ async fn main() {
                     last_seq = Some(s);
                 }
                 if op == 10 {
-                    hb_interval =
-                        Duration::from_millis(v["d"]["heartbeat_interval"].as_u64().unwrap_or(41250));
+                    hb_interval = Duration::from_millis(
+                        v["d"]["heartbeat_interval"].as_u64().unwrap_or(41250),
+                    );
                     next_hb = Instant::now() + hb_interval;
                     if !sent_identify {
                         sent_identify = true;
@@ -99,10 +100,7 @@ async fn main() {
                                     .as_object()
                                     .map(|o| o.keys().cloned().collect())
                                     .unwrap_or_default();
-                                println!(
-                                    "[{mode}] guild {} keys: {gkeys:?}",
-                                    guild["id"]
-                                );
+                                println!("[{mode}] guild {} keys: {gkeys:?}", guild["id"]);
                                 for f in ["channels", "members", "presences", "voice_states"] {
                                     let len = guild[f].as_array().map(|a| a.len()).unwrap_or(0);
                                     println!("[{mode}]   {f}: {len}");
@@ -204,7 +202,10 @@ async fn main() {
                                 }
                                 ops_desc.push(format!(
                                     "{name}{} items={items}",
-                                    opd["range"].as_array().map(|r| format!("{r:?}")).unwrap_or_default()
+                                    opd["range"]
+                                        .as_array()
+                                        .map(|r| format!("{r:?}"))
+                                        .unwrap_or_default()
                                 ));
                             }
                         }
@@ -240,8 +241,13 @@ async fn main() {
                                             .as_object()
                                             .map(|o| o.keys().cloned().collect())
                                             .unwrap_or_default();
-                                        let acts = p["activities"].as_array().map(|a| a.len()).unwrap_or(0);
-                                        println!("[{mode}]   presence keys: {pk:?}, activities: {acts}");
+                                        let acts = p["activities"]
+                                            .as_array()
+                                            .map(|a| a.len())
+                                            .unwrap_or(0);
+                                        println!(
+                                            "[{mode}]   presence keys: {pk:?}, activities: {acts}"
+                                        );
                                         if let Some(a0) = p["activities"].get(0) {
                                             let s = a0.to_string();
                                             let cut: String = s.chars().take(600).collect();
@@ -266,7 +272,9 @@ async fn main() {
                                 println!("[{mode}]   items[0..8]: {}", sample.join(" "));
                                 // Порядок активностей КАК ПРИСЛАЛ DISCORD: для каждого
                                 // участника с активностями (тип:название, timestamps.start)
-                                println!("[{mode}]   === активности по участникам (порядок Discord) ===");
+                                println!(
+                                    "[{mode}]   === активности по участникам (порядок Discord) ==="
+                                );
                                 for it in items {
                                     let Some(m) = it.get("member") else { continue };
                                     let uid = m["user"]["id"].as_str().unwrap_or("");

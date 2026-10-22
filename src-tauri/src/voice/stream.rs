@@ -2,8 +2,8 @@ use serde_json::json;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager};
 
-use discord_client::{DiscordState, StreamTarget};
 use crate::video_render;
+use discord_client::{DiscordState, StreamTarget};
 
 /// RTC-подключение к стриму (Go Live), который мы смотрим.
 ///
@@ -14,7 +14,7 @@ use crate::video_render;
 ///
 /// Recv-only: мы НЕ шлём ни Speak, ни Video, ни медиа — только Media Sink Wants
 /// (Шаг 1.4). Звук демки (Opus, SOUNDSHARE-семантика) идёт через общий mixer.
-
+///
 /// Подключается к стриму, если цель готова и мы ещё не подключены к ней.
 /// Вызывается, когда `STREAM_CREATE` + `STREAM_SERVER_UPDATE` собрали полный
 /// `StreamTarget`. Все проверки — под локом, сами подключения — вне локов.
@@ -79,6 +79,45 @@ async fn connect_stream_task(
     user_id: String,
 ) -> Result<(), String> {
     let state: tauri::State<'_, DiscordState> = app.state();
+    // Сериализация с disconnect_stream: если off случился, пока мы ждали/коннектились,
+    // установка conn ПОСЛЕ очистки слота оставила бы «голый» RTC-коннект.
+    let _stream_guard = state.stream_connect_lock.lock().await;
+    // Повторные проверки ПОД локом: пока таск ждал лок, другой таск мог
+    // уже подключиться, а цель (или голос) — успеть сняться.
+    {
+        let slot = state.stream_conn.lock().unwrap();
+        let same_key = slot.session_id.as_deref() == Some(target.stream_key.as_str());
+        let alive = slot.conn.as_ref().is_some_and(|c| {
+            !matches!(
+                c.state().phase(),
+                oto::ConnectionPhase::Failed | oto::ConnectionPhase::Closed
+            )
+        });
+        if same_key && alive {
+            log::debug!(
+                "Stream: уже подключены к {} (дедуп под локом)",
+                target.stream_key
+            );
+            return Ok(());
+        }
+    }
+    let target_ok = {
+        let stream = state.stream.lock().unwrap();
+        stream
+            .as_ref()
+            .is_some_and(|t| t.stream_key == target.stream_key && t.ready())
+    };
+    let voice_ok = state
+        .voice
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|v| v.session_id.as_deref())
+        == Some(voice_session.as_str());
+    if !target_ok || !voice_ok {
+        log::info!("Stream connect отменён: цель/голос сняты, пока таск ждал подключения");
+        return Ok(());
+    }
     let rtc_server = target
         .rtc_server_id
         .as_deref()
@@ -101,7 +140,10 @@ async fn connect_stream_task(
         .trim()
         .trim_start_matches("wss://")
         .to_string();
-    let token = target.token.clone().ok_or(crate::i18n::t(crate::i18n::Key::StreamNoToken))?;
+    let token = target
+        .token
+        .clone()
+        .ok_or(crate::i18n::t(crate::i18n::Key::StreamNoToken))?;
 
     log::info!(
         "Stream connect (oto): key={} rtc_server={rtc_server} rtc_channel={rtc_channel} endpoint={endpoint}",
@@ -119,11 +161,22 @@ async fn connect_stream_task(
         oto::VoiceToken::new(token.clone()),
     );
 
-    let oto_conn = oto::Oto::builder().build().map_err(|e| format!("oto init: {e}"))?;
+    let oto_conn = oto::Oto::builder()
+        .build()
+        .map_err(|e| format!("oto init: {e}"))?;
     let conn = match oto_conn.connect(info).await {
         Ok(c) => c,
         Err(e) => {
-            *state.stream.lock().unwrap() = None;
+            // Цель сбрасываем, только если это ВСЁ ЕЩЁ та же (не пришла новая).
+            {
+                let mut stream = state.stream.lock().unwrap();
+                if stream
+                    .as_ref()
+                    .is_some_and(|t| t.stream_key == target.stream_key)
+                {
+                    *stream = None;
+                }
+            }
             let _ = app.emit(
                 "stream_update",
                 json!({"watching": false, "reason": format!("{:?}/{:?}", e.operation(), e.kind())}),
@@ -235,13 +288,15 @@ async fn connect_stream_task(
                         break;
                     }
                 }
-                oto::ConnectionEvent::AudioReceived { user_id, opus, missing, .. } => {
+                oto::ConnectionEvent::AudioReceived {
+                    user_id,
+                    opus,
+                    missing,
+                    ..
+                } => {
                     // Звук демки — в общий mixer (ключ — id стримера: свой декодер).
                     // Deafen гасит и стрим-звук, как и голос.
-                    if pump_state
-                        .self_deaf
-                        .load(Ordering::Relaxed)
-                    {
+                    if pump_state.self_deaf.load(Ordering::Relaxed) {
                         continue;
                     }
                     let tx = pump_state.playback_tx.lock().unwrap().clone();
@@ -252,8 +307,9 @@ async fn connect_stream_task(
                         // ОДНУ per-user очередь и играли вперемешку по кадру
                         // («дробление»). Теперь у каждого свой джиттер-буфер,
                         // а микшер их суммирует.
+                        // try_send: полная очередь не должна останавливать насос.
                         let mix_uid = user_id | (1u64 << 63);
-                        let _ = tx.send((mix_uid, opus, missing as u8)).await;
+                        let _ = tx.try_send((mix_uid, opus, missing as u8));
                     }
                 }
                 oto::ConnectionEvent::VideoStateReceived {
@@ -271,7 +327,12 @@ async fn connect_stream_task(
                     *pump_video_ssrc.lock().unwrap() = Some(video_ssrc);
                     let _ = pump_keyframe_tx.try_send(());
                 }
-                oto::ConnectionEvent::VideoFrameReceived { user_id, ssrc, timestamp, frame } => {
+                oto::ConnectionEvent::VideoFrameReceived {
+                    user_id,
+                    ssrc,
+                    timestamp,
+                    frame,
+                } => {
                     // ФАЗА 3: Annex-B H264-кадр из депакетизатора. Кладём в
                     // очередь декодер-таска (не декодируем тут — чтоб не тормозить
                     // насос). Фронт рисует готовые пиксели из stream_video_draw.
@@ -287,20 +348,21 @@ async fn connect_stream_task(
                     }
                     video_render::push_frame(&pump_video_queue, frame);
                 }
-                oto::ConnectionEvent::DaveStateChanged { opcode, before, after, .. } => {
+                oto::ConnectionEvent::DaveStateChanged {
+                    opcode,
+                    before,
+                    after,
+                    ..
+                } => {
                     log::debug!("Stream (oto) DAVE control {opcode}: {before:?} → {after:?}");
                 }
-                oto::ConnectionEvent::DaveWaitingForMembers { timeout_seconds, .. } => {
-                    log::info!(
-                        "Stream (oto) DAVE: ждёт участников (таймаут {timeout_seconds}s)"
-                    );
+                oto::ConnectionEvent::DaveWaitingForMembers {
+                    timeout_seconds, ..
+                } => {
+                    log::info!("Stream (oto) DAVE: ждёт участников (таймаут {timeout_seconds}s)");
                 }
                 oto::ConnectionEvent::Failure(f) => {
-                    log::warn!(
-                        "Stream (oto) failed: {:?}/{:?}",
-                        f.operation(),
-                        f.kind()
-                    );
+                    log::warn!("Stream (oto) failed: {:?}/{:?}", f.operation(), f.kind());
                     break;
                 }
                 oto::ConnectionEvent::Closed(_) => break,
@@ -326,7 +388,10 @@ async fn connect_stream_task(
         if ours {
             *pump_state.stream_video_stop.lock().unwrap() = None;
         }
-        let _ = pump_app.emit("stream_update", json!({"watching": false, "stream_key": stream_key}));
+        let _ = pump_app.emit(
+            "stream_update",
+            json!({"watching": false, "stream_key": stream_key}),
+        );
     });
 
     Ok(())
@@ -335,18 +400,19 @@ async fn connect_stream_task(
 /// Полный офф соединения стрима: шлём Delete Stream (op 19) и рвём RTC.
 pub(crate) async fn disconnect_stream(app: &AppHandle) {
     let state: tauri::State<'_, DiscordState> = app.state();
+    // Лок коннекта: если connect_stream_task в полёте, ждём его — иначе он
+    // установит conn ПОСЛЕ нашей очистки и оставит «голый» RTC-коннект.
+    let _stream_guard = state.stream_connect_lock.lock().await;
     let conn = {
         let mut slot = state.stream_conn.lock().unwrap();
-        slot.conn.take()
-    };
-    if let Some(c) = conn {
-        let _ = c.shutdown().await;
-    }
-    {
-        let mut slot = state.stream_conn.lock().unwrap();
+        let conn = slot.conn.take();
         slot.session_id = None;
         slot.token = None;
         slot.pump_spawned = false;
+        conn
+    };
+    if let Some(c) = conn {
+        let _ = c.shutdown().await;
     }
     // Стрима нет — decode-таск видео тоже завершаем (дроп sender'а = стоп).
     *state.stream_video_stop.lock().unwrap() = None;

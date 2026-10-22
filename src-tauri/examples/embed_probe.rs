@@ -45,7 +45,9 @@ async fn main() {
         .json()
         .await
         .unwrap();
-        let Some(carr) = channels.as_array() else { continue };
+        let Some(carr) = channels.as_array() else {
+            continue;
+        };
         for ch in carr {
             let ch_id = ch["id"].as_str().unwrap_or("");
             let name = ch["name"].as_str().unwrap_or("");
@@ -65,9 +67,7 @@ async fn main() {
             let Some(arr) = msgs.as_array() else { continue };
             for m in arr {
                 let content = m["content"].as_str().unwrap_or("");
-                let interesting = content.contains("giphy.com")
-                    || content.contains("tenor.com")
-                    ;
+                let interesting = content.contains("giphy.com") || content.contains("tenor.com");
                 for e in m["embeds"].as_array().cloned().unwrap_or_default() {
                     let eu = e["url"].as_str().unwrap_or("");
                     let et = e["type"].as_str().unwrap_or("");
@@ -84,10 +84,7 @@ async fn main() {
                     }
                     let short: String = content.chars().take(70).collect();
                     println!("=== [{gname} #{name}] content={short}");
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&e).unwrap_or_default()
-                    );
+                    println!("{}", serde_json::to_string_pretty(&e).unwrap_or_default());
                 }
             }
         }

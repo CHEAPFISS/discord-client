@@ -525,6 +525,9 @@ function escapeHtml(text) {
   div.textContent = text;
   return div.innerHTML;
 }
+function escapeAttr(text) {
+  return text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 function mentionHtml(id) {
   const m = state.members.find((x) => x.user_id === id);
   if (!m) {
@@ -584,7 +587,7 @@ function embedNode(e) {
   if (e.title) {
     const t2 = escapeHtml(e.title);
     parts.push(
-      e.url ? `<a class="embed-title" href="${e.url.replace(/"/g, "%22")}">${t2}</a>` : `<div class="embed-title">${t2}</div>`
+      e.url ? `<a class="embed-title" href="${escapeAttr(e.url)}">${t2}</a>` : `<div class="embed-title">${t2}</div>`
     );
   }
   if (e.description) {
@@ -690,7 +693,21 @@ function avatarNode(msg) {
   }
   return av;
 }
+var renderedIds = /* @__PURE__ */ new Set();
+var RENDERED_IDS_MAX = 500;
+function rememberRendered(id) {
+  if (!id) return true;
+  if (renderedIds.has(id)) return false;
+  renderedIds.add(id);
+  while (renderedIds.size > RENDERED_IDS_MAX) {
+    const oldest = renderedIds.values().next().value;
+    if (oldest === void 0) break;
+    renderedIds.delete(oldest);
+  }
+  return true;
+}
 function renderMessage(msg, opts = {}) {
+  if (!rememberRendered(msg.id)) return;
   const messagesEl = el("messages");
   const existingEmpty = messagesEl.querySelector(".messages-empty");
   if (existingEmpty) existingEmpty.remove();
@@ -738,6 +755,7 @@ function renderMessage(msg, opts = {}) {
   if (atBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 function clearMessages() {
+  renderedIds.clear();
   const messagesEl = el("messages");
   messagesEl.innerHTML = "";
   const empty = document.createElement("div");
@@ -815,6 +833,14 @@ function initChatInput() {
       });
     }
   });
+  messagesEl.addEventListener("auxclick", (e) => {
+    if (e.button !== 1) return;
+    const link = e.target.closest("a[href]");
+    if (!link) return;
+    e.preventDefault();
+    void api.openUrl(link.href).catch(() => {
+    });
+  });
   messageInput.addEventListener("input", () => {
     messageInput.style.height = "auto";
     messageInput.style.height = messageInput.scrollHeight + "px";
@@ -865,9 +891,11 @@ window.addEventListener("resize", fitCanvasToStage);
 function attachVideoChannel() {
   const channel = new Channel();
   channel.onmessage = (buf) => {
+    if (buf.byteLength <= 8) return;
     const view = new DataView(buf);
     const width = view.getUint32(0, true);
     const height = view.getUint32(4, true);
+    if (width === 0 || height === 0 || width > 8192 || height > 8192) return;
     drawJpegFrame(width, height, buf.slice(8));
   };
   invoke("stream_video_attach", { channel }).catch((e) => {

@@ -75,7 +75,10 @@ pub fn push_frame(queue: &VideoFrameQueue, frame: Vec<u8>) {
             }
         }
     }
-    q.frames.push_back(IngressFrame { data: frame, is_idr });
+    q.frames.push_back(IngressFrame {
+        data: frame,
+        is_idr,
+    });
 }
 
 /// Есть ли в Annex-B кадре IDR (NAL type 5) — точка возобновления H264.
@@ -183,51 +186,80 @@ pub async fn decode_and_draw_task(
         }
         // Контекст H264: промежуточные кадры прогоняем через декодер ради
         // опоры БЕЗ кодирования; JPEG — только у последнего (ревью C1).
-        let mut latest: Option<(u32, u32, Vec<u8>)> = None;
-        let n = frames.len();
-        for (i, frame) in frames.into_iter().enumerate() {
-            let is_last = i + 1 == n;
-            let res = if is_last {
-                decoder.decode_jpeg(&frame.data)
-            } else {
-                decoder
-                    .decode_frame(&frame.data)
-                    .map(|_| None as Option<(u32, u32, Vec<u8>)>)
-            };
-            match res {
-                Ok(Some(jpeg)) => {
-                    stat_decoded += 1;
-                    stat_jpeg_bytes += jpeg.2.len() as u64;
-                    stat_encode_us += decoder.last_encode_us();
-                    latest = Some(jpeg);
-                }
-                Ok(None) => {} // декодер копит опору (SPS/PPS) — норма
-                Err(e) => {
-                    // Декодер потерял опору (потеря пакета/сброс) — просим у
-                    // отправителя свежий IDR (RTCP PLI). Без этого картинка
-                    // стоит до следующего редкого ключевого кадра.
-                    request_keyframe(&mut last_keyframe_request);
-                    decode_errors += 1;
-                    if decode_errors <= 2 {
-                        log::warn!("Stream video decode FAIL: len={} err={e}", frame.data.len());
+        // Декод+encode — CPU-bound (десятки мс на 1080p): в spawn_blocking,
+        // иначе блокирует воркер токио (на нём же Gateway, heartbeat и голос).
+        let dec = decoder;
+        let blocking = tokio::task::spawn_blocking(move || {
+            let mut latest: Option<(u32, u32, Vec<u8>)> = None;
+            let mut decoded: u64 = 0;
+            let mut jpeg_bytes: u64 = 0;
+            let mut encode_us: u64 = 0;
+            let mut errors: u64 = 0;
+            let mut need_pli = false;
+            let n = frames.len();
+            let mut dec = dec;
+            for (i, frame) in frames.into_iter().enumerate() {
+                let is_last = i + 1 == n;
+                let res = if is_last {
+                    dec.decode_jpeg(&frame.data)
+                } else {
+                    dec.decode_frame(&frame.data)
+                        .map(|_| None as Option<(u32, u32, Vec<u8>)>)
+                };
+                match res {
+                    Ok(Some(jpeg)) => {
+                        decoded += 1;
+                        jpeg_bytes += jpeg.2.len() as u64;
+                        encode_us += dec.last_encode_us();
+                        latest = Some(jpeg);
+                    }
+                    Ok(None) => {} // декодер копит опору (SPS/PPS) — норма
+                    Err(e) => {
+                        // Декодер потерял опору (потеря пакета/сброс) — просим у
+                        // отправителя свежий IDR (RTCP PLI). Без этого картинка
+                        // стоит до следующего редкого ключевого кадра.
+                        need_pli = true;
+                        errors += 1;
+                        if errors <= 2 {
+                            log::warn!(
+                                "Stream video decode FAIL: len={} err={e}",
+                                frame.data.len()
+                            );
+                        }
                     }
                 }
             }
+            (
+                dec, latest, decoded, jpeg_bytes, encode_us, errors, need_pli,
+            )
+        })
+        .await;
+        let (dec, latest, batch_decoded, batch_jpeg, batch_encode, batch_errors, need_pli) =
+            match blocking {
+                Ok(v) => v,
+                Err(e) => {
+                    log::error!("Stream video: decode-задача упала: {e}");
+                    break;
+                }
+            };
+        decoder = dec;
+        stat_decoded += batch_decoded;
+        stat_jpeg_bytes += batch_jpeg;
+        stat_encode_us += batch_encode;
+        decode_errors += batch_errors;
+        if need_pli {
+            request_keyframe(&mut last_keyframe_request);
         }
         // Статистика: раз в 5 с — fps, размер/время JPEG, честные оконные
         // счётчики ошибок и skip-тиков.
         if stat_started.elapsed() >= std::time::Duration::from_secs(5) {
             let secs = stat_started.elapsed().as_secs_f64();
-            let avg_kb = if stat_decoded > 0 {
-                stat_jpeg_bytes / stat_decoded / 1024
-            } else {
-                0
-            };
-            let avg_enc_ms = if stat_decoded > 0 {
-                stat_encode_us / stat_decoded / 1000
-            } else {
-                0
-            };
+            let avg_kb = stat_jpeg_bytes
+                .checked_div(stat_decoded)
+                .map_or(0, |bytes| bytes / 1024);
+            let avg_enc_ms = stat_encode_us
+                .checked_div(stat_decoded)
+                .map_or(0, |us| us / 1000);
             log::info!(
                 "Stream video: {:.1} fps, jpeg ~{} КБ (encode ~{} мс), \
                  декод-ошибок {}, skip-тиков {} из {}",

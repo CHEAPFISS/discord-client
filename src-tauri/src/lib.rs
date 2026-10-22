@@ -15,13 +15,23 @@ pub struct GatewaySender {
 
 impl GatewaySender {
     pub fn new() -> Self {
-        Self { tx: tokio::sync::Mutex::new(None) }
+        Self {
+            tx: tokio::sync::Mutex::new(None),
+        }
     }
 
     pub async fn send(&self, payload: serde_json::Value) -> Result<(), String> {
         let guard = self.tx.lock().await;
-        let sender = guard.as_ref().ok_or(crate::i18n::t(crate::i18n::Key::GatewayNotConnected))?;
+        let sender = guard
+            .as_ref()
+            .ok_or(crate::i18n::t(crate::i18n::Key::GatewayNotConnected))?;
         sender.send(payload).map_err(|e| e.to_string())
+    }
+}
+
+impl Default for GatewaySender {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -32,6 +42,7 @@ pub type ActiveVoiceConnection = oto::VoiceConnection;
 ///
 /// Хендл активного oto-соединения + session_id, для которого оно создавалось.
 /// Токен Discord одноразовый — повторное подключение на ту же сессию даёт 4014/4022.
+#[derive(Default)]
 pub struct VoiceSlot {
     pub conn: Option<ActiveVoiceConnection>,
     pub session_id: Option<String>,
@@ -68,12 +79,6 @@ impl StreamTarget {
             && self.rtc_channel_id.is_some()
             && self.token.is_some()
             && self.endpoint.is_some()
-    }
-}
-
-impl Default for VoiceSlot {
-    fn default() -> Self {
-        Self { conn: None, session_id: None, token: None, pump_spawned: false }
     }
 }
 
@@ -235,7 +240,12 @@ impl SpeakingTracker {
 
     /// Полный сброс (выход из голоса): возвращает всех, кого надо погасить.
     pub fn clear(&self) -> Vec<u64> {
-        self.users.lock().unwrap().drain().map(|(uid, _)| uid).collect()
+        self.users
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(uid, _)| uid)
+            .collect()
     }
 }
 
@@ -275,6 +285,10 @@ pub struct DiscordState {
     pub stream: Arc<Mutex<Option<StreamTarget>>>,
     /// Хендл RTC-соединения стрима (второй коннект параллельно с голосовым).
     pub stream_conn: Arc<Mutex<VoiceSlot>>,
+    /// Сериализация connect/disconnect стрима: иначе коннект, завершившийся
+    /// после off'а (unwatch/STREAM_DELETE/уход из канала), ставит «голый»
+    /// RTC-коннект после очистки слота (гонка maybe_connect ↔ disconnect).
+    pub stream_connect_lock: Arc<tokio::sync::Mutex<()>>,
     /// Бинарный канал кадров видео (Tauri Channel<InvokeResponseBody>): фронт
     /// создаёт его при открытии оверлея демки (команда stream_video_attach).
     /// Кадр: [u32 width LE][u32 height LE][rgba…] — без JSON-оверхеда (~15 МБ/кадр).
@@ -286,11 +300,14 @@ pub struct DiscordState {
     pub stream_video_stop: Arc<Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
     /// Общий sender кадров в play_audio_task: голос и звук стрима играют через
     /// ОДИН mixer (второй аудио-прибор дал бы конфликт/двойной звук).
-    pub playback_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<(u64, Vec<u8>, u8)>>>>,
+    pub playback_tx: Arc<Mutex<Option<PlaybackSender>>>,
 }
 
+/// Кадр звука в общий mixer: (SSRC, Opus-пакет, длительность, мс).
+pub type PlaybackSender = tokio::sync::mpsc::Sender<(u64, Vec<u8>, u8)>;
+
 /// Цель подключения к голосовому каналу + собранные данные авторизации.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VoiceData {
     pub guild_id: String,
     pub channel_id: String,
@@ -300,11 +317,40 @@ pub struct VoiceData {
     pub endpoint: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// Debug вручную: derive печатал бы voice-токен в логи целиком (ревью).
+impl std::fmt::Debug for VoiceData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VoiceData")
+            .field("guild_id", &self.guild_id)
+            .field("channel_id", &self.channel_id)
+            .field("user_id", &self.user_id)
+            .field("session_id", &self.session_id)
+            .field(
+                "token",
+                &self.token.as_ref().map(|_| "<redacted>".to_string()),
+            )
+            .field("endpoint", &self.endpoint)
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DiscordSession {
     pub token: String,
     pub user_id: String,
     pub username: String,
+}
+
+// Debug вручную: в токене — полный доступ к аккаунту, в логи он попадать
+// не должен даже случайным `{:?}` (ревью).
+impl std::fmt::Debug for DiscordSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiscordSession")
+            .field("token", &"<redacted>")
+            .field("user_id", &self.user_id)
+            .field("username", &self.username)
+            .finish()
+    }
 }
 
 impl Default for DiscordState {
@@ -326,6 +372,7 @@ impl Default for DiscordState {
             member_fetch: Arc::new(MemberFetchHub::default()),
             stream: Arc::new(Mutex::new(None)),
             stream_conn: Arc::new(Mutex::new(VoiceSlot::default())),
+            stream_connect_lock: Arc::new(tokio::sync::Mutex::new(())),
             stream_video_channel: Arc::new(Mutex::new(None)),
             stream_video_stop: Arc::new(Mutex::new(None)),
             playback_tx: Arc::new(Mutex::new(None)),
@@ -349,7 +396,7 @@ impl DiscordState {
             let mut guard = self.session.lock().unwrap();
             *guard = session;
         }
-        save_session_to_disk(&self)
+        save_session_to_disk(self)
     }
 
     pub fn token(&self) -> Option<String> {
@@ -447,7 +494,7 @@ fn save_session_to_disk(state: &DiscordState) -> Result<(), String> {
             // Пишем ONLY 0600: в файле plaintext user-токен полного доступа к аккаунту.
             #[cfg(unix)]
             {
-                use std::os::unix::fs::OpenOptionsExt;
+                use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
                 let mut file = fs::OpenOptions::new()
                     .write(true)
                     .create(true)
@@ -455,7 +502,12 @@ fn save_session_to_disk(state: &DiscordState) -> Result<(), String> {
                     .mode(0o600)
                     .open(&path)
                     .map_err(|e| e.to_string())?;
-                file.write_all(json.as_bytes()).map_err(|e| e.to_string())
+                file.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
+                // mode(0o600) выше действует ТОЛЬКО при создании файла: если он
+                // уже существовал с 0644 (старая версия/ручное создание), права
+                // остались бы открытыми на чтение токена — зажимаем явно.
+                file.set_permissions(fs::Permissions::from_mode(0o600))
+                    .map_err(|e| e.to_string())
             }
             #[cfg(not(unix))]
             {
