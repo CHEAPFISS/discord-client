@@ -26,6 +26,10 @@ Discord Gateway handling live in Rust.
 > permission to use Discord's service in violation of their terms. Read
 > [docs/LEGAL.md](docs/LEGAL.md) before using or distributing this project.
 
+## Screenshots
+
+![Discord Client: text chat, member list, voice connection and screen-share viewing](docs/screenshots/main.png)
+
 ## Features
 
 - **Sign-in** with a user token or the OAuth2 flow; the session is persisted in

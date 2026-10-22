@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use discord_client::{DiscordState, GatewaySender};
-use tauri::{generate_context, generate_handler, Manager};
+use tauri::{generate_context, generate_handler};
 
 pub use discord_client::i18n;
 
@@ -65,12 +65,6 @@ fn main() {
             voice::stream::stream_video_attach,
         ])
         .setup(|app| {
-            #[cfg(debug_assertions)]
-            {
-                if let Some(window) = app.get_webview_window("main") {
-                    window.open_devtools();
-                }
-            }
             // Монитор состояния отправки микрофона (диагностика «пропадания звука»).
             // setup идёт вне tokio-контекста — нужен tauri::async_runtime,
             // иначе паника "there is no reactor running".
