@@ -226,9 +226,14 @@ pub fn set_language(lang: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // These tests mutate the process-wide language, so they must not overlap.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn language_tags_are_parsed() {
+        let _guard = TEST_LOCK.lock().unwrap();
         set("ru-RU");
         assert_eq!(t(Key::EmptyToken), "Пустой токен");
         set("en-US");
@@ -241,6 +246,7 @@ mod tests {
 
     #[test]
     fn placeholders_are_substituted() {
+        let _guard = TEST_LOCK.lock().unwrap();
         set("en");
         assert_eq!(
             f(Key::RequestFailed, &[("e", "timeout")]),
