@@ -64,9 +64,12 @@ Review these first. Paths are relative to the repository root.
 | 8 | Error handling | Many errors are `String`; some paths log and continue | whole backend |
 | 9 | i18n coverage | Missing keys fall back to English or the raw key | `src/locales/`, `i18n.ts` |
 
-There are no `unsafe` blocks in the project's own Rust code, but the vendored
-`oto`/`davey` code and C libraries (OpenH264, turbojpeg, Opus, ALSA) are outside
-that guarantee.
+There is one `unsafe` block in the project's own Rust code: `video.rs` loads the
+system `libopenh264` through `libloading` and calls
+`OpenH264API::from_blob_path_unchecked`, so the dynamic-library safety contract
+must hold. The vendored `oto`/`davey` code contains additional `unsafe` code,
+and the C libraries (OpenH264, turbojpeg, Opus, ALSA) are outside Rust's safety
+guarantees.
 
 ## Suggested review plan
 

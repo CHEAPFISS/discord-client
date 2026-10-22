@@ -135,7 +135,7 @@ future decoder path but not implemented.
 Before the first push:
 
 - the Git history was rewritten to remove `src-tauri/target` (repo size dropped
-  from 336 MB to well under a megabyte);
+  from 336 MB to a couple of megabytes);
 - `vendor/oto` was committed with its licenses, so the build no longer depends
   on a nested Git checkout;
 - the app got a **RU/EN i18n layer** with a live language switch, JSON

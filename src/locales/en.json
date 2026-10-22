@@ -10,7 +10,7 @@
   "login.helpStep2": "Press <b>F12</b> → open the <b>Console</b> tab",
   "login.helpStep3": "Run: <code>localStorage.getItem(\"token\").replaceAll('\"','')</code>",
   "login.helpStep4": "Copy the result and paste it here",
-  "login.tokenWarning": "⚠️ The token grants full access to your account. Never share it. Third-party clients violate Discord's Terms of Service.",
+  "login.tokenWarning": "⚠️ The token grants full access to your account. Never share it. Third-party clients violate Discord's Terms of Service and may get your account banned.",
   "login.openingBrowser": "Opening Discord in your browser…",
   "login.tokenRequired": "Paste a token into the field",
   "login.checkingToken": "Checking the token…",

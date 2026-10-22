@@ -10,7 +10,7 @@
   "login.helpStep2": "Нажми <b>F12</b> → вкладка <b>Console</b>",
   "login.helpStep3": "Введи: <code>localStorage.getItem(\"token\").replaceAll('\"','')</code>",
   "login.helpStep4": "Скопируй результат и вставь сюда",
-  "login.tokenWarning": "⚠️ Токен — это доступ к твоему аккаунту. Никому его не передавай. Использование сторонних клиентов — против ToS Discord.",
+  "login.tokenWarning": "⚠️ Токен — это доступ к твоему аккаунту. Никому его не передавай. Сторонние клиенты нарушают ToS Discord, аккаунт могут заблокировать.",
   "login.openingBrowser": "Открываю Discord в браузере…",
   "login.tokenRequired": "Вставь токен в поле",
   "login.checkingToken": "Проверяю токен…",
