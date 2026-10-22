@@ -30,7 +30,8 @@ commands run. "Compiles" is not enough for voice or video changes.
 - [ ] AI-assisted (describe which parts and how you verified them)
 
 We allow AI-assisted contributions, but you are responsible for understanding
-and testing the code. See [docs/AI_DISCLOSURE.md](docs/AI_DISCLOSURE.md).
+and testing the code. See
+[docs/AI_DISCLOSURE.md](https://github.com/CHEAPFISS/discord-client/blob/master/docs/AI_DISCLOSURE.md).
 
 ## Checklist
 
