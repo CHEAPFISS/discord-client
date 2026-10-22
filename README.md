@@ -99,6 +99,11 @@ sudo apt-get install -y \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
 ```
 
+Ubuntu 24.04 ships libjpeg-turbo 2.x, while `turbojpeg-sys` requires 3.x. Either
+build with `--features bundled-turbojpeg` (needs `cmake` and `nasm`; it compiles
+the copy bundled with the crate) or install libjpeg-turbo 3.x system-wide. Arch's
+`libjpeg-turbo` is 3.x, so the default build works there.
+
 At runtime the screen-share viewer also needs the system **OpenH264** shared
 library (`libopenh264.so`, package `openh264` on Arch, `libopenh264-7` on
 Ubuntu). It is loaded dynamically; a missing library disables video decoding but
@@ -142,6 +147,11 @@ cd src-tauri && cargo test    # Rust unit tests (parsers, member mapping, video)
 
 The video tests read `/tmp/opencode/ref.264` and `/tmp/opencode/idr.bin` when
 present and skip otherwise, so they are safe in CI.
+
+CI runs on Ubuntu 24.04, whose `libturbojpeg` is 2.x while `turbojpeg-sys`
+requires >= 3.0. The workflow installs `cmake` and `nasm` and runs
+`cargo test --locked --features bundled-turbojpeg`, which builds the libjpeg-turbo
+copy bundled with the crate. On Arch the system 3.x is used by default.
 
 ## Internationalization
 

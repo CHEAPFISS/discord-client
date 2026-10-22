@@ -104,6 +104,10 @@ cd src-tauri && cargo test
 `npm run check` regenerates `src/app.js`; commit the updated bundle. CI verifies
 that the committed bundle matches the TypeScript sources.
 
+On Ubuntu 24.04, run `cargo test --features bundled-turbojpeg` (needs `cmake` and
+`nasm`); Arch's libjpeg-turbo 3.x works without the feature. CI uses the bundled
+path because Ubuntu ships 2.x.
+
 Optional but recommended:
 
 ```bash

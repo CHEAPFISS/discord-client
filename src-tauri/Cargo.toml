@@ -6,6 +6,13 @@ description = "A lightweight Discord client built with Rust and Tauri"
 license = "MIT"
 repository = "https://github.com/CHEAPFISS/discord-client"
 
+[features]
+default = []
+# Ubuntu 24.04 ships libjpeg-turbo 2.x, while turbojpeg-sys requires >= 3.0.
+# CI enables this feature to build the copy bundled with the crate; local Arch
+# builds keep using the system library through pkg-config.
+bundled-turbojpeg = ["turbojpeg/cmake", "turbojpeg/require-simd"]
+
 [dependencies]
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
