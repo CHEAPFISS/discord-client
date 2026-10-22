@@ -28,6 +28,9 @@ fn main() {
         .install_default()
         .ok();
 
+    // config.json may contain the OAuth client secret; tighten it on startup.
+    discord_client::harden_config_permissions();
+
     tauri::Builder::default()
         .manage(DiscordState::load_or_default())
         .manage(GatewaySender::new())
