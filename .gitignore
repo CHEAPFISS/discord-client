@@ -11,6 +11,6 @@ cache/
 coverage/
 /target/
 target/
-# Локальный форк oto (nested repo, не коммитится целый):
-# branch local-fix = fix/announced-mls-transitions + диагностика davey
-vendor/
+# Форк oto вендорен в этот репозиторий (ветка local-fix: DAVE-видео, PLI,
+# приём RTP-видео; см. vendor/oto/OTO_PATCHES.md). Build-мусор (target/)
+# отсекается правилом выше.

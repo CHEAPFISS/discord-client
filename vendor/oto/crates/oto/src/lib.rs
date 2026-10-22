@@ -1,0 +1,56 @@
+#![forbid(unsafe_code)]
+#![doc = "Oto's transport-only Discord voice connection core."]
+#![warn(missing_docs)]
+
+#[cfg(test)]
+#[global_allocator]
+static TEST_ALLOCATOR: &stats_alloc::StatsAlloc<std::alloc::System> =
+    &stats_alloc::INSTRUMENTED_SYSTEM;
+
+mod audio;
+mod audio_worker;
+mod config;
+mod connection;
+mod dave;
+mod error;
+mod frame_channel;
+mod gateway;
+mod model;
+mod pacer;
+mod transport;
+mod video;
+
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub mod __fuzzing {
+    pub fn dave_binary_envelope(input: &[u8]) {
+        crate::gateway::fuzz_dave_binary_envelope(input);
+    }
+
+    pub fn dave_control_sequence(input: &[u8]) {
+        crate::dave::fuzz_control_sequence(input);
+    }
+
+    pub fn gateway_json_dispatch(input: &[u8]) {
+        crate::gateway::fuzz_gateway_json_dispatch(input);
+    }
+
+    pub fn ip_discovery_response(input: &[u8]) {
+        crate::transport::fuzz_discovery_response(input);
+    }
+}
+
+pub use audio::{FrameSource, FrameStatus, PacedAudioSender};
+mod send_trace;
+pub use config::{Oto, OtoBuilder, ResourceLimits};
+pub use connection::{EventSubscriber, VoiceConnection};
+pub use error::{DaveContext, DaveFailure, Error, ErrorKind, Operation, RetryDisposition};
+pub use frame_channel::{
+    FrameBacklog, FrameReader, FrameSendError, FrameWriter, buffered_frame_channel, frame_channel,
+};
+pub use model::{
+    AudioPhase, AudioSnapshot, AudioStats, CloseReason, ConnectionEvent, ConnectionGeneration,
+    ConnectionPhase, ConnectionSnapshot, ConnectionStats, EventReceiveError, FailureSnapshot,
+    SourceGeneration, VoiceConnectInfo, VoiceToken,
+};
+pub use send_trace::{SendRecord, SendTiming, SendTrace};
