@@ -29,8 +29,8 @@ disclosure, see [HISTORY.md](HISTORY.md) and [AI_DISCLOSURE.md](AI_DISCLOSURE.md
 
 The app is a single Tauri window. Rust owns all network I/O, credentials and
 media processing. The webview is a rendering layer: it holds UI state, receives
-events, and sends commands. There is no local HTTP server and no Node.js at
-runtime.
+events, and sends commands. There is no local HTTP server for the UI (the OAuth
+redirect briefly binds `127.0.0.1:1436`), and no Node.js at runtime.
 
 ## Runtime model
 
