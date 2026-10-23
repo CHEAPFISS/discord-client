@@ -341,7 +341,7 @@ async fn gateway_once(
         }),
     };
     write
-        .send(Message::Text(payload.to_string()))
+        .send(Message::text(payload.to_string()))
         .await
         .map_err(|e| e.to_string())?;
 
@@ -366,7 +366,7 @@ async fn gateway_once(
                 }
                 awaiting_ack = true;
                 let hb = json!({"op": 1, "d": last_seq});
-                if write.send(Message::Text(hb.to_string())).await.is_err() {
+                if write.send(Message::text(hb.to_string())).await.is_err() {
                     return Err("heartbeat send failed".into());
                 }
             }
@@ -377,7 +377,7 @@ async fn gateway_once(
                             log::info!("Gateway: маркер релогина — останавливаю цикл");
                             return Ok(true);
                         }
-                        if write.send(Message::Text(payload.to_string())).await.is_err() {
+                        if write.send(Message::text(payload.to_string())).await.is_err() {
                             return Err("outgoing send failed".into());
                         }
                     }

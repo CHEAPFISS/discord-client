@@ -71,7 +71,7 @@ async fn main() {
                                 "compress": false
                             }),
                         };
-                        tx.send(Message::Text(json!({"op": 2, "d": d}).to_string()))
+                        tx.send(Message::text(json!({"op": 2, "d": d}).to_string()))
                             .await
                             .unwrap();
                         println!("[{mode}] Identify отправлен");
@@ -135,7 +135,7 @@ async fn main() {
                                     }
                                 });
                                 println!("[{mode}] op8 → {payload}");
-                                tx.send(Message::Text(payload.to_string())).await.unwrap();
+                                tx.send(Message::text(payload.to_string())).await.unwrap();
                             }
                         }
                     }
@@ -185,7 +185,7 @@ async fn main() {
                                     }}
                                 });
                                 println!("[{mode}] op37 → {payload}");
-                                tx.send(Message::Text(payload.to_string())).await.unwrap();
+                                tx.send(Message::text(payload.to_string())).await.unwrap();
                             }
                         }
                     }
@@ -334,7 +334,7 @@ async fn main() {
         }
         if Instant::now() >= next_hb {
             let _ = tx
-                .send(Message::Text(json!({"op": 1, "d": last_seq}).to_string()))
+                .send(Message::text(json!({"op": 1, "d": last_seq}).to_string()))
                 .await;
             next_hb = Instant::now() + hb_interval;
         }
