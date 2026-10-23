@@ -72,7 +72,7 @@ Discord Gateway handling live in Rust.
 ### Arch Linux
 
 ```bash
-sudo pacman -S --needed base-devel rust nodejs npm pkgconf \
+sudo pacman -S --needed base-devel rust nodejs npm pkgconf cmake \
   webkit2gtk-4.1 gtk3 libsoup3 \
   alsa-lib opus libjpeg-turbo openh264 \
   gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav
@@ -91,7 +91,7 @@ subset):
 
 ```bash
 sudo apt-get install -y \
-  build-essential pkg-config libssl-dev \
+  build-essential pkg-config libssl-dev cmake \
   libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
   libjavascriptcoregtk-4.1-dev librsvg2-dev libxdo-dev \
   libasound2-dev libopus-dev libturbojpeg0-dev \
@@ -103,6 +103,9 @@ Ubuntu 24.04 ships libjpeg-turbo 2.x, while `turbojpeg-sys` requires 3.x. Either
 build with `--features bundled-turbojpeg` (needs `cmake` and `nasm`; it compiles
 the copy bundled with the crate) or install libjpeg-turbo 3.x system-wide. Arch's
 `libjpeg-turbo` is 3.x, so the default build works there.
+
+`cmake` is also required by the `opus` crate, which builds its bundled libopus
+from source.
 
 At runtime the screen-share viewer also needs the system **OpenH264** shared
 library (`libopenh264.so`, package `openh264` on Arch, `libopenh264-7` on

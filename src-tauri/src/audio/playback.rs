@@ -61,10 +61,10 @@ fn play_audio_blocking(mut rx: mpsc::Receiver<(u64, Vec<u8>, u8)>) -> Result<(),
     {
         if range.sample_format() == cpal::SampleFormat::F32
             && range.channels() == 2
-            && range.min_sample_rate().0 <= 48000
-            && 48000 <= range.max_sample_rate().0
+            && range.min_sample_rate() <= 48000
+            && 48000 <= range.max_sample_rate()
         {
-            chosen = Some(range.with_sample_rate(cpal::SampleRate(48000)).config());
+            chosen = Some(range.with_sample_rate(48000).config());
             break 'ranges;
         }
     }
@@ -75,7 +75,7 @@ fn play_audio_blocking(mut rx: mpsc::Receiver<(u64, Vec<u8>, u8)>) -> Result<(),
             .map(|d| d.config())
             .unwrap_or_else(|| panic!("{}", crate::i18n::t(crate::i18n::Key::NoOutputConfig)))
     });
-    if config.sample_rate.0 != 48000 || config.channels != 2 {
+    if config.sample_rate != 48000 || config.channels != 2 {
         log::warn!(
             "аудио-устройство не 48 кГц стерео: {:?} — будет ресемпл на стороне ОС",
             config
@@ -99,7 +99,7 @@ fn play_audio_blocking(mut rx: mpsc::Receiver<(u64, Vec<u8>, u8)>) -> Result<(),
 
     let stream = device
         .build_output_stream(
-            &config,
+            config,
             {
                 let underruns = underruns.clone();
                 let consumed_cb = consumed_cb.clone();

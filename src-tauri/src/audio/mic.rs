@@ -48,10 +48,10 @@ impl MicSource {
         {
             if range.sample_format() == cpal::SampleFormat::F32
                 && range.channels() == 1
-                && range.min_sample_rate().0 <= 48000
-                && 48000 <= range.max_sample_rate().0
+                && range.min_sample_rate() <= 48000
+                && 48000 <= range.max_sample_rate()
             {
-                chosen = Some(range.with_sample_rate(cpal::SampleRate(48000)));
+                chosen = Some(range.with_sample_rate(48000));
                 break 'cfg;
             }
         }
@@ -84,10 +84,12 @@ impl MicSource {
                 .name("mic-encode".into())
                 .spawn(move || {
                     let mut encoder =
-                        opus::Encoder::new(48000, opus::Channels::Stereo, opus::CodingMode::Audio)
+                        opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio)
                             .expect("opus encoder");
                     // 64 kbps: естественный потолочный битрейт Discord-голоса.
-                    encoder.set_bitrate(64_000).expect("opus bitrate");
+                    encoder
+                        .set_bitrate(opus::Bitrate::Bits(64_000))
+                        .expect("opus bitrate");
                     let mut denoiser = DenoiseState::new();
                     // Первый выход модели — fade-in нулевой истории: прогреваем
                     // состояние, но не пишем его в кадр.
@@ -231,7 +233,7 @@ impl MicSource {
                     .spawn(move || {
                         let result = device
                             .build_input_stream(
-                                &config,
+                                config,
                                 {
                                     let ring_cb = ring.clone();
                                     let ring_cv_cb = ring_cv.clone();
@@ -326,5 +328,24 @@ impl FrameSource for MicSource {
         // Очередь пуста: регистрируем waker — рабочий поток будит после выкладки.
         *self.waker.lock().unwrap() = Some(cx.waker().clone());
         Poll::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Регрессия миграции opus 0.4: энкодер с настройками из mic-потока
+    /// (Application::Audio + 64 kbps) должен кодировать кадр 20 мс.
+    #[test]
+    fn opus_encoder_accepts_settings() {
+        let mut encoder =
+            opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio)
+                .expect("opus encoder");
+        encoder
+            .set_bitrate(opus::Bitrate::Bits(64_000))
+            .expect("opus bitrate");
+        let pcm = vec![0i16; 960 * 2];
+        let mut out = vec![0u8; 4000];
+        let len = encoder.encode(&pcm, &mut out).expect("opus encode");
+        assert!(len > 0);
     }
 }
