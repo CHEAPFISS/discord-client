@@ -58,6 +58,9 @@ tauri-build = { version = "2", features = [] }
 # каждый кадр) на -O0 отнимал заметные миллисекунды; отладка при этом остаётся.
 [profile.dev]
 opt-level = 1
+# line-tables-only вместо полного debuginfo: линковка dev-бинарника
+# заметно быстрее, а имён функций и строк в стектрейсах достаточно.
+debug = "line-tables-only"
 
 [profile.release]
 opt-level = 3
