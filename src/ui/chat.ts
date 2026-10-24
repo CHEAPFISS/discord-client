@@ -32,6 +32,50 @@ function escapeAttr(text: string): string {
     .replace(/>/g, '&gt;');
 }
 
+/** Ленивые GIF/видео в чате: грузим и играем только видимые элементы.
+ *  Иначе десятки <video> держат декодеры и кадры в памяти WebKit. */
+let chatMediaObserver: IntersectionObserver | null = null;
+
+function observeChatVideo(video: HTMLVideoElement): void {
+  const src = video.dataset.src;
+  if (!src) return;
+  const autoplay = video.dataset.autoplay === '1';
+  if (!('IntersectionObserver' in window)) {
+    video.src = src;
+    if (autoplay) void video.play().catch(() => {});
+    return;
+  }
+  if (!chatMediaObserver) {
+    const root = el('messages');
+    chatMediaObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const v = entry.target as HTMLVideoElement;
+          const s = v.dataset.src;
+          if (!s) continue;
+          if (entry.isIntersecting) {
+            if (v.getAttribute('src') !== s) v.src = s;
+            if (v.dataset.autoplay === '1' && v.paused) {
+              void v.play().catch(() => {});
+            }
+          } else {
+            v.pause();
+            // Вне экрана отпускаем декодер и буферы кадров.
+            v.removeAttribute('src');
+            v.load();
+          }
+        }
+      },
+      { root, rootMargin: '300px 0px' },
+    );
+  }
+  chatMediaObserver.observe(video);
+}
+
+function unobserveChatVideo(video: HTMLVideoElement): void {
+  chatMediaObserver?.unobserve(video);
+}
+
 // Упоминание <@id> → «@ник»: имя берём из списка участников сервера; цвет —
 // CSS-переменные --mention-* (настраиваются в одной точке).
 function mentionHtml(id: string): string {
@@ -77,18 +121,22 @@ function gifNode(e: Embed): HTMLElement {
   wrap.className = 'gif-item';
   const video = document.createElement('video');
   video.className = 'gif-video';
-  video.src = e.video ?? '';
-  video.autoplay = true;
+  video.dataset.src = e.video ?? '';
+  video.dataset.autoplay = '1';
   video.muted = true;
   video.playsInline = true;
-  video.preload = 'auto';
+  video.preload = 'none';
   // WebKit: loop перезагружает src на петле (видимое мигание) — перезапуск вручную.
   video.onended = () => {
     video.currentTime = 0;
     void video.play().catch(() => {});
   };
-  video.onerror = () => wrap.remove();
+  video.onerror = () => {
+    unobserveChatVideo(video);
+    wrap.remove();
+  };
   wrap.appendChild(video);
+  observeChatVideo(video);
   const label = document.createElement('span');
   label.className = 'gif-label';
   label.textContent = 'GIF';
@@ -148,17 +196,21 @@ function embedNode(e: Embed): HTMLElement {
     // перезапуск вручную по ended — WebKit на loop перезагружает src (мигание).
     const video = document.createElement('video');
     video.className = 'embed-video';
-    video.src = e.video;
-    video.autoplay = true;
+    video.dataset.src = e.video;
+    video.dataset.autoplay = '1';
     video.muted = true;
     video.playsInline = true;
-    video.preload = 'auto';
+    video.preload = 'none';
     video.onended = () => {
       video.currentTime = 0;
       void video.play().catch(() => {});
     };
-    video.onerror = () => video.remove();
+    video.onerror = () => {
+      unobserveChatVideo(video);
+      video.remove();
+    };
     box.appendChild(video);
+    observeChatVideo(video);
   } else if (e.image) {
     const img = document.createElement('img');
     img.className = 'embed-image';
@@ -194,10 +246,12 @@ function appendAttachments(bubble: HTMLElement, msg: ChatMessage): void {
     } else if (isVideo(a)) {
       const video = document.createElement('video');
       video.className = 'att-video';
-      video.src = a.url;
+      video.dataset.src = a.url;
+      video.dataset.autoplay = '0';
       video.controls = true;
-      video.preload = 'metadata';
+      video.preload = 'none';
       media.appendChild(video);
+      observeChatVideo(video);
     } else {
       const link = document.createElement('a');
       link.className = 'att-file';
@@ -209,16 +263,16 @@ function appendAttachments(bubble: HTMLElement, msg: ChatMessage): void {
   if (media.childElementCount > 0) bubble.appendChild(media);
 }
 
-/** Аватар автора: с CDN (gif для анимированных), иначе — буква кружком. */
+/** Аватар автора: с CDN статичным PNG (gif-аватарки зря жрут память), иначе — буква кружком. */
 function avatarNode(msg: ChatMessage): HTMLElement {
   const av = document.createElement('div');
   av.className = 'avatar';
   const letter = (msg.author || '?').charAt(0).toUpperCase();
   if (msg.author_id && msg.author_avatar) {
-    const ext = msg.author_avatar.startsWith('a_') ? 'gif' : 'png';
     const img = document.createElement('img');
-    img.src = `https://cdn.discordapp.com/avatars/${msg.author_id}/${msg.author_avatar}.${ext}?size=64`;
+    img.src = `https://cdn.discordapp.com/avatars/${msg.author_id}/${msg.author_avatar}.png?size=64`;
     img.alt = '';
+    img.loading = 'lazy';
     img.onerror = () => {
       img.remove();
       av.textContent = letter;
@@ -235,6 +289,8 @@ function avatarNode(msg: ChatMessage): HTMLElement {
 // копию; набор ограничен (хранит порядок вставки — вытесняем старые).
 const renderedIds = new Set<string>();
 const RENDERED_IDS_MAX = 500;
+/** Сколько сообщений держим в DOM: старые узлы удаляем, чтобы WebKit не пух. */
+const MAX_DOM_MESSAGES = 250;
 
 function rememberRendered(id: string): boolean {
   if (!id) return true; // id нет — дедуплицировать нечем
@@ -251,6 +307,10 @@ function rememberRendered(id: string): boolean {
 function renderMessage(msg: ChatMessage, opts: { live?: boolean } = {}): void {
   if (!rememberRendered(msg.id)) return;
   const messagesEl = el('messages');
+  // автопрокрутка только если пользователь внизу чата (считаем ДО вставки)
+  const atBottom =
+    opts.live === true &&
+    messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - 40;
   // Убираем заглушку "пусто" при первом сообщении
   const existingEmpty = messagesEl.querySelector('.messages-empty');
   if (existingEmpty) existingEmpty.remove();
@@ -302,9 +362,34 @@ function renderMessage(msg: ChatMessage, opts: { live?: boolean } = {}): void {
   div.appendChild(bubble);
   messagesEl.appendChild(div);
   if (!opts.live) return;
-  // автопрокрутка только если пользователь внизу чата
-  const atBottom = messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - 40;
+  pruneMessages(messagesEl);
   if (atBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+/** Держит число сообщений в DOM ограниченным (id для дедупа остаются). */
+function pruneMessages(messagesEl: HTMLElement): void {
+  const nodes = messagesEl.querySelectorAll<HTMLElement>(':scope > .message');
+  const extra = nodes.length - MAX_DOM_MESSAGES;
+  if (extra <= 0) return;
+  // Не выдёргиваем сообщения из-под носа, если пользователь читает самое начало.
+  if (messagesEl.scrollTop < 40) return;
+  let removedHeight = 0;
+  for (let i = 0; i < extra; i++) {
+    const node = nodes[i];
+    removedHeight += node.offsetHeight;
+    // Отпускаем декодированные картинки/видео сразу, не дожидаясь GC WebKit.
+    node.querySelectorAll('img').forEach((img) => {
+      img.removeAttribute('src');
+    });
+    node.querySelectorAll('video').forEach((video) => {
+      unobserveChatVideo(video);
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    });
+    node.remove();
+  }
+  messagesEl.scrollTop -= removedHeight;
 }
 
 function clearMessages(): void {
@@ -312,6 +397,16 @@ function clearMessages(): void {
   // иначе при повторном открытии канала история не отрисуется.
   renderedIds.clear();
   const messagesEl = el('messages');
+  // Освобождаем медиа-ресурсы до удаления DOM (иначе WebKit держит декодеры).
+  messagesEl.querySelectorAll('video').forEach((video) => {
+    unobserveChatVideo(video);
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  });
+  messagesEl.querySelectorAll('img').forEach((img) => {
+    img.removeAttribute('src');
+  });
   messagesEl.innerHTML = '';
   const empty = document.createElement('div');
   empty.className = 'messages-empty';

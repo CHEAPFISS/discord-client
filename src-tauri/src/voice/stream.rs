@@ -416,6 +416,12 @@ pub(crate) async fn disconnect_stream(app: &AppHandle) {
     }
     // Стрима нет — decode-таск видео тоже завершаем (дроп sender'а = стоп).
     *state.stream_video_stop.lock().unwrap() = None;
+    // После декодера/сетевых буферов возвращаем освобождённые страницы ОС:
+    // иначе glibc-арены держат PSS высоким до следующего стрима.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
 }
 
 /// Фронт открыл оверлей демки: принимаем бинарный канал для видео-кадров.

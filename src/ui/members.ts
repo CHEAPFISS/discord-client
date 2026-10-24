@@ -9,11 +9,12 @@ import { getLanguage, t } from '../i18n';
 import { state } from '../state';
 import { watchStream } from './stream';
 
-/** URL аватарки с CDN Discord (animated → .gif). */
+/** URL статичной аватарки с CDN Discord. */
 function avatarUrl(m: Member): string | null {
   if (!m.avatar) return null;
-  const ext = m.avatar.startsWith('a_') ? 'gif' : 'png';
-  return `https://cdn.discordapp.com/avatars/${m.user_id}/${m.avatar}.${ext}?size=64`;
+  // Всегда статичный PNG: анимированные gif-аватарки в списке участников
+  // заметно жрут память и CPU, а пользы почти нет.
+  return `https://cdn.discordapp.com/avatars/${m.user_id}/${m.avatar}.png?size=64`;
 }
 
 function statusOf(userId: string): string {
@@ -142,10 +143,24 @@ export async function loadMembers(guildId: string, channelId: string): Promise<v
 /** PRESENCE_UPDATE: обновляем статус и активности участника. */
 export function handlePresenceUpdate(p: PresenceUpdatePayload): void {
   if (p.guild_id !== state.membersGuildId) return;
+  const wasOffline = statusOf(p.user_id) === 'offline';
   state.presences.set(p.user_id, { status: p.status, activities: p.activities });
   // Запоминаем, что этот user обновился «вживую» — при загрузке снапшот его не затрёт.
   state.presencesTouched.add(p.user_id);
-  if (!state.membersLoading) renderMembers();
+  if (state.membersLoading) return;
+  // Статус в той же группе (online/offline) — обновляем одну строку, а не
+  // пересобираем весь список с аватарками на каждый typing/activity.
+  const isOffline = p.status === 'offline';
+  if (wasOffline === isOffline) refreshMemberRow(p.user_id);
+  else renderMembers();
+}
+
+/** Точечно перерисовывает строку участника (presence без смены группы). */
+function refreshMemberRow(userId: string): void {
+  const row = document.querySelector<HTMLElement>(`.member[data-user-id="${CSS.escape(userId)}"]`);
+  const member = state.members.find((m) => m.user_id === userId);
+  if (!row || !member) return;
+  row.replaceWith(memberRow(member));
 }
 
 /** VOICE_STATE_UPDATE: обновляем «кто в каком голосовом канале» (+ флаги стрима). */
@@ -233,6 +248,7 @@ export function renderMembers(): void {
 function memberRow(m: Member): HTMLElement {
   const row = document.createElement('div');
   row.className = 'member';
+  row.dataset.userId = m.user_id;
 
   // Аватарка (или буква, если её нет / не загрузилась)
   const av = document.createElement('div');
@@ -242,6 +258,8 @@ function memberRow(m: Member): HTMLElement {
     const img = document.createElement('img');
     img.src = url;
     img.alt = '';
+    // Большие серверы: не декодируем аватарки, которых не видно.
+    img.loading = 'lazy';
     img.onerror = () => {
       img.remove();
       av.prepend(letterSpan(m.username));
@@ -335,6 +353,7 @@ function voiceMemberRow(m: Member): HTMLElement {
     const img = document.createElement('img');
     img.src = url;
     img.alt = '';
+    img.loading = 'lazy';
     img.onerror = () => {
       img.remove();
       av.prepend(letterSpan(m.username, 'voice-member-letter'));

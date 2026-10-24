@@ -221,6 +221,8 @@ pub async fn get_guild_members(
     // 60с с недостающими участниками.
     if complete {
         let mut cache = state.member_fetch.cache.lock().unwrap();
+        // Не копим списки участников по всем серверам: старые записи не нужны.
+        cache.retain(|_, (when, _)| when.elapsed() < CACHE_TTL);
         cache.insert(guild_id.clone(), (Instant::now(), groups.clone()));
     }
     Ok(groups)

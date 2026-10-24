@@ -28,6 +28,9 @@ env_logger = "0.11"
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 bytes = "1"
 hex = "0.4"
+# Ограничение glibc-арен: у клиента много потоков, иначе malloc раздувает
+# до десятков арен по 64 MB. См. mallopt(M_ARENA_MAX, 2) в main.rs.
+libc = "0.2"
 # opus = { version = "0.1", optional = true }  # требует libopus в системе — подключим на этапе звука
 opus = "0.4"
 cpal = "0.18"

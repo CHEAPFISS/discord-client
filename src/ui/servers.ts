@@ -34,6 +34,7 @@ export async function loadGuilds(): Promise<void> {
         const img = document.createElement('img');
         img.src = imgUrl;
         img.alt = g.name;
+        img.loading = 'lazy';
         img.onerror = () => {
           div.textContent = g.name.charAt(0).toUpperCase();
           div.classList.add('server-letter');
