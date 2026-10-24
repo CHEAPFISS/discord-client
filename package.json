@@ -1,7 +1,7 @@
 {
   "name": "discord-client",
   "productName": "Discord Client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A lightweight Discord client built with Rust and Tauri",
   "license": "MIT",
   "private": true,
