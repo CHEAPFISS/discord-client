@@ -6,6 +6,22 @@ use crate::audio::playback::play_audio_task;
 use crate::voice::{attach_mic_task, clear_speaking, request_voice_rejoin};
 use discord_client::DiscordState;
 
+/// Подменяет voice-эндпоинт только в debug-сборке — для локального
+/// `scripts/voice-testkit.sh`. В release переменная игнорируется, чтобы
+/// voice-токен нельзя было увести на произвольный хост.
+fn effective_voice_endpoint(endpoint_in: &str) -> String {
+    let endpoint = endpoint_in.trim().trim_start_matches("wss://").to_string();
+    #[cfg(debug_assertions)]
+    if let Ok(raw) = std::env::var("DISCORD_VOICE_ENDPOINT_OVERRIDE") {
+        let value = raw.trim().trim_start_matches("wss://").to_string();
+        if !value.is_empty() {
+            log::warn!("Voice endpoint override (debug): {endpoint} -> {value}");
+            return value;
+        }
+    }
+    endpoint
+}
+
 /// Голосовое подключение Discord через oto: Voice Gateway v8 + DAVE (E2EE) + RTP.
 ///
 /// Правила управления соединением:
@@ -38,7 +54,7 @@ pub(crate) async fn connect_voice(
     let channel = channel_ids
         .parse::<u64>()
         .map_err(|e| format!("channel_id: {e}"))?;
-    let endpoint = endpoint_in.trim().trim_start_matches("wss://").to_string();
+    let endpoint = effective_voice_endpoint(&endpoint_in);
 
     // Цель могла смениться/сняться, пока задача стояла в очереди (leave, новый join,
     // смена аккаунта): неактуальная попытка не тратит одноразовый токен и не воскрешает голос.

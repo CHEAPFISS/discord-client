@@ -1,0 +1,11 @@
+[package]
+name = "voice-testkit"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Local oto voice gateway for manual transport/audio testing"
+
+[dependencies]
+base64 = "0.22"
+oto-testkit = { path = "../../vendor/oto/crates/oto-testkit" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
