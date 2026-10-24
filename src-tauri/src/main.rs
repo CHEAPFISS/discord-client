@@ -15,6 +15,14 @@ mod video_render;
 mod voice;
 
 fn main() {
+    // glibc создаёт отдельную malloc-арену почти под каждый поток (до 64 MB),
+    // а у клиента потоков много: без лимита это десятки MB пустой памяти.
+    // Ограничиваем до двух арен до старта tokio/аудио-потоков.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 2);
+    }
+
     // Дефолт-фильтр: info + глушим крипто/WS-крейсы. RUST_LOG=debug/trace перекрывает.
     // RUST_LOG=trace раскрывает заголовки (Authorization) и Identify-фрейм — не для реальных сессий.
     env_logger::Builder::from_env(

@@ -528,6 +528,46 @@ function escapeHtml(text) {
 function escapeAttr(text) {
   return text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+var chatMediaObserver = null;
+function observeChatVideo(video) {
+  const src = video.dataset.src;
+  if (!src) return;
+  const autoplay = video.dataset.autoplay === "1";
+  if (!("IntersectionObserver" in window)) {
+    video.src = src;
+    if (autoplay) void video.play().catch(() => {
+    });
+    return;
+  }
+  if (!chatMediaObserver) {
+    const root = el("messages");
+    chatMediaObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const v = entry.target;
+          const s = v.dataset.src;
+          if (!s) continue;
+          if (entry.isIntersecting) {
+            if (v.getAttribute("src") !== s) v.src = s;
+            if (v.dataset.autoplay === "1" && v.paused) {
+              void v.play().catch(() => {
+              });
+            }
+          } else {
+            v.pause();
+            v.removeAttribute("src");
+            v.load();
+          }
+        }
+      },
+      { root, rootMargin: "300px 0px" }
+    );
+  }
+  chatMediaObserver.observe(video);
+}
+function unobserveChatVideo(video) {
+  chatMediaObserver?.unobserve(video);
+}
 function mentionHtml(id) {
   const m = state.members.find((x) => x.user_id === id);
   if (!m) {
@@ -557,18 +597,22 @@ function gifNode(e) {
   wrap.className = "gif-item";
   const video = document.createElement("video");
   video.className = "gif-video";
-  video.src = e.video ?? "";
-  video.autoplay = true;
+  video.dataset.src = e.video ?? "";
+  video.dataset.autoplay = "1";
   video.muted = true;
   video.playsInline = true;
-  video.preload = "auto";
+  video.preload = "none";
   video.onended = () => {
     video.currentTime = 0;
     void video.play().catch(() => {
     });
   };
-  video.onerror = () => wrap.remove();
+  video.onerror = () => {
+    unobserveChatVideo(video);
+    wrap.remove();
+  };
   wrap.appendChild(video);
+  observeChatVideo(video);
   const label = document.createElement("span");
   label.className = "gif-label";
   label.textContent = "GIF";
@@ -616,18 +660,22 @@ function embedNode(e) {
   } else if (e.video) {
     const video = document.createElement("video");
     video.className = "embed-video";
-    video.src = e.video;
-    video.autoplay = true;
+    video.dataset.src = e.video;
+    video.dataset.autoplay = "1";
     video.muted = true;
     video.playsInline = true;
-    video.preload = "auto";
+    video.preload = "none";
     video.onended = () => {
       video.currentTime = 0;
       void video.play().catch(() => {
       });
     };
-    video.onerror = () => video.remove();
+    video.onerror = () => {
+      unobserveChatVideo(video);
+      video.remove();
+    };
     box.appendChild(video);
+    observeChatVideo(video);
   } else if (e.image) {
     const img = document.createElement("img");
     img.className = "embed-image";
@@ -660,10 +708,12 @@ function appendAttachments(bubble, msg) {
     } else if (isVideo(a)) {
       const video = document.createElement("video");
       video.className = "att-video";
-      video.src = a.url;
+      video.dataset.src = a.url;
+      video.dataset.autoplay = "0";
       video.controls = true;
-      video.preload = "metadata";
+      video.preload = "none";
       media.appendChild(video);
+      observeChatVideo(video);
     } else {
       const link = document.createElement("a");
       link.className = "att-file";
@@ -679,10 +729,10 @@ function avatarNode(msg) {
   av.className = "avatar";
   const letter = (msg.author || "?").charAt(0).toUpperCase();
   if (msg.author_id && msg.author_avatar) {
-    const ext = msg.author_avatar.startsWith("a_") ? "gif" : "png";
     const img = document.createElement("img");
-    img.src = `https://cdn.discordapp.com/avatars/${msg.author_id}/${msg.author_avatar}.${ext}?size=64`;
+    img.src = `https://cdn.discordapp.com/avatars/${msg.author_id}/${msg.author_avatar}.png?size=64`;
     img.alt = "";
+    img.loading = "lazy";
     img.onerror = () => {
       img.remove();
       av.textContent = letter;
@@ -695,6 +745,7 @@ function avatarNode(msg) {
 }
 var renderedIds = /* @__PURE__ */ new Set();
 var RENDERED_IDS_MAX = 500;
+var MAX_DOM_MESSAGES = 250;
 function rememberRendered(id) {
   if (!id) return true;
   if (renderedIds.has(id)) return false;
@@ -709,6 +760,7 @@ function rememberRendered(id) {
 function renderMessage(msg, opts = {}) {
   if (!rememberRendered(msg.id)) return;
   const messagesEl = el("messages");
+  const atBottom = opts.live === true && messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - 40;
   const existingEmpty = messagesEl.querySelector(".messages-empty");
   if (existingEmpty) existingEmpty.remove();
   const div = document.createElement("div");
@@ -751,12 +803,43 @@ function renderMessage(msg, opts = {}) {
   div.appendChild(bubble);
   messagesEl.appendChild(div);
   if (!opts.live) return;
-  const atBottom = messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - 40;
+  pruneMessages(messagesEl);
   if (atBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+function pruneMessages(messagesEl) {
+  const nodes = messagesEl.querySelectorAll(":scope > .message");
+  const extra = nodes.length - MAX_DOM_MESSAGES;
+  if (extra <= 0) return;
+  if (messagesEl.scrollTop < 40) return;
+  let removedHeight = 0;
+  for (let i = 0; i < extra; i++) {
+    const node = nodes[i];
+    removedHeight += node.offsetHeight;
+    node.querySelectorAll("img").forEach((img) => {
+      img.removeAttribute("src");
+    });
+    node.querySelectorAll("video").forEach((video) => {
+      unobserveChatVideo(video);
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    });
+    node.remove();
+  }
+  messagesEl.scrollTop -= removedHeight;
 }
 function clearMessages() {
   renderedIds.clear();
   const messagesEl = el("messages");
+  messagesEl.querySelectorAll("video").forEach((video) => {
+    unobserveChatVideo(video);
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+  });
+  messagesEl.querySelectorAll("img").forEach((img) => {
+    img.removeAttribute("src");
+  });
   messagesEl.innerHTML = "";
   const empty = document.createElement("div");
   empty.className = "messages-empty";
@@ -874,6 +957,7 @@ function refreshChatTexts() {
 // src/ui/stream.ts
 var videoCtx = null;
 var videoFrameInFlight = false;
+var lastFrameAt = 0;
 var videoFrameSize = null;
 var lastStreamStatus = null;
 function fitCanvasToStage() {
@@ -905,9 +989,14 @@ function attachVideoChannel() {
 async function drawJpegFrame(width, height, jpeg) {
   if (!state.watching) return;
   if (videoFrameInFlight) return;
+  const now = performance.now();
+  if (now - lastFrameAt < 42) return;
+  lastFrameAt = now;
   videoFrameInFlight = true;
+  let bitmap = null;
   try {
-    const bitmap = await createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }));
+    bitmap = await createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }));
+    if (!state.watching) return;
     const canvas = el("streamCanvas");
     const stage = el("streamScreen").querySelector(".stream-stage");
     if (canvas.width !== width || canvas.height !== height) {
@@ -920,7 +1009,6 @@ async function drawJpegFrame(width, height, jpeg) {
     if (!videoCtx) videoCtx = canvas.getContext("2d");
     if (!videoCtx) return;
     videoCtx.drawImage(bitmap, 0, 0, width, height);
-    bitmap.close();
     if (canvas.hidden) {
       canvas.hidden = false;
       stage?.classList.add("has-video");
@@ -928,6 +1016,7 @@ async function drawJpegFrame(width, height, jpeg) {
     }
   } catch {
   } finally {
+    bitmap?.close();
     videoFrameInFlight = false;
   }
 }
@@ -982,7 +1071,11 @@ function closeScreen() {
   el("streamScreen").classList.remove("active");
   const canvas = el("streamCanvas");
   canvas.hidden = true;
+  canvas.width = 0;
+  canvas.height = 0;
+  videoFrameSize = null;
   videoCtx = null;
+  lastFrameAt = 0;
   el("streamScreen").querySelector(".stream-stage")?.classList.remove("has-video");
   renderMembers();
 }
@@ -1008,8 +1101,7 @@ function initStreamScreen() {
 // src/ui/members.ts
 function avatarUrl(m) {
   if (!m.avatar) return null;
-  const ext = m.avatar.startsWith("a_") ? "gif" : "png";
-  return `https://cdn.discordapp.com/avatars/${m.user_id}/${m.avatar}.${ext}?size=64`;
+  return `https://cdn.discordapp.com/avatars/${m.user_id}/${m.avatar}.png?size=64`;
 }
 function statusOf(userId) {
   return state.presences.get(userId)?.status ?? "offline";
@@ -1112,9 +1204,19 @@ async function loadMembers(guildId, channelId) {
 }
 function handlePresenceUpdate(p) {
   if (p.guild_id !== state.membersGuildId) return;
+  const wasOffline = statusOf(p.user_id) === "offline";
   state.presences.set(p.user_id, { status: p.status, activities: p.activities });
   state.presencesTouched.add(p.user_id);
-  if (!state.membersLoading) renderMembers();
+  if (state.membersLoading) return;
+  const isOffline = p.status === "offline";
+  if (wasOffline === isOffline) refreshMemberRow(p.user_id);
+  else renderMembers();
+}
+function refreshMemberRow(userId) {
+  const row = document.querySelector(`.member[data-user-id="${CSS.escape(userId)}"]`);
+  const member = state.members.find((m) => m.user_id === userId);
+  if (!row || !member) return;
+  row.replaceWith(memberRow(member));
 }
 function handleVoiceMemberUpdate(p) {
   if (p.guild_id !== state.membersGuildId) return;
@@ -1183,6 +1285,7 @@ function renderMembers() {
 function memberRow(m) {
   const row = document.createElement("div");
   row.className = "member";
+  row.dataset.userId = m.user_id;
   const av = document.createElement("div");
   av.className = "member-avatar";
   const url = avatarUrl(m);
@@ -1190,6 +1293,7 @@ function memberRow(m) {
     const img = document.createElement("img");
     img.src = url;
     img.alt = "";
+    img.loading = "lazy";
     img.onerror = () => {
       img.remove();
       av.prepend(letterSpan(m.username));
@@ -1266,6 +1370,7 @@ function voiceMemberRow(m) {
     const img = document.createElement("img");
     img.src = url;
     img.alt = "";
+    img.loading = "lazy";
     img.onerror = () => {
       img.remove();
       av.prepend(letterSpan(m.username, "voice-member-letter"));
@@ -1485,6 +1590,7 @@ async function loadGuilds() {
         const img = document.createElement("img");
         img.src = imgUrl;
         img.alt = g.name;
+        img.loading = "lazy";
         img.onerror = () => {
           div.textContent = g.name.charAt(0).toUpperCase();
           div.classList.add("server-letter");

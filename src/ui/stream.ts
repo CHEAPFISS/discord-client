@@ -18,6 +18,9 @@ let videoCtx: CanvasRenderingContext2D | null = null;
 /** Защита от «наезда» кадров: createImageBitmap асинхронен, если предыдущий
  *  кадр ещё декодируется — текущий отбрасывается (на экране всегда свежий). */
 let videoFrameInFlight = false;
+/** Ограничение частоты кадров: 24 fps хватает, а лишние decode/draw зря
+ *  нагружают WebKit и плодят мусор в его аллокаторе. */
+let lastFrameAt = 0;
 /** Размер последнего кадра — для вписывания canvas в сцену при resize окна. */
 let videoFrameSize: { w: number; h: number } | null = null;
 /** Remembered status key so a language switch can re-translate the placeholder. */
@@ -67,9 +70,15 @@ function attachVideoChannel(): void {
 async function drawJpegFrame(width: number, height: number, jpeg: ArrayBuffer): Promise<void> {
   if (!state.watching) return; // не смотрим — кадры бэкенд-остатки, игнор
   if (videoFrameInFlight) return; // предыдущий кадр ещё декодируется — берём свежий позже
+  const now = performance.now();
+  if (now - lastFrameAt < 42) return; // максимум ~24 fps
+  lastFrameAt = now;
   videoFrameInFlight = true;
+  let bitmap: ImageBitmap | null = null;
   try {
-    const bitmap = await createImageBitmap(new Blob([jpeg], { type: 'image/jpeg' }));
+    bitmap = await createImageBitmap(new Blob([jpeg], { type: 'image/jpeg' }));
+    // Пока декодировали, стрим могли закрыть: не воскрешаем canvas.
+    if (!state.watching) return;
     const canvas = el<HTMLCanvasElement>('streamCanvas');
     const stage = el('streamScreen').querySelector('.stream-stage');
     if (canvas.width !== width || canvas.height !== height) {
@@ -82,7 +91,6 @@ async function drawJpegFrame(width: number, height: number, jpeg: ArrayBuffer): 
     if (!videoCtx) videoCtx = canvas.getContext('2d');
     if (!videoCtx) return;
     videoCtx.drawImage(bitmap, 0, 0, width, height);
-    bitmap.close();
     // Показываем видео, убирая плейсхолдер (только при первом кадре).
     if (canvas.hidden) {
       canvas.hidden = false;
@@ -92,6 +100,7 @@ async function drawJpegFrame(width: number, height: number, jpeg: ArrayBuffer): 
   } catch {
     // Битый/устаревший кадр — молча пропускаем.
   } finally {
+    bitmap?.close();
     videoFrameInFlight = false;
   }
 }
@@ -164,7 +173,12 @@ function closeScreen(): void {
   // Сбрасываем видео: прячем canvas и возвращаем плейсхолдер для следующего стрима.
   const canvas = el<HTMLCanvasElement>('streamCanvas');
   canvas.hidden = true;
+  // 0×0 освобождает буфер кадра (до 4K это десятки MB) сразу, а не при GC.
+  canvas.width = 0;
+  canvas.height = 0;
+  videoFrameSize = null;
   videoCtx = null;
+  lastFrameAt = 0;
   el('streamScreen').querySelector('.stream-stage')?.classList.remove('has-video');
   renderMembers(); // вернуть в колонке строку «Смотреть демонстрацию»
 }
