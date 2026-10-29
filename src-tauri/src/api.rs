@@ -1,10 +1,7 @@
 //! Tauri-команды REST-слоя поверх крейта `client-api`.
 //!
 //! Типы ответов, запросы и парсер сообщений живут в `client-api` (без Tauri);
-//! здесь только тонкие обёртки команд и ре-экспорт того, что нужно другим
-//! Tauri-модулям (auth.rs, gateway.rs).
-
-pub use client_api::{http, parse_message, API_BASE};
+//! здесь только тонкие обёртки команд.
 
 use client_api::{Channel, ChatMessage, Guild, GuildActivity, Role};
 use discord_client::DiscordState;

@@ -823,6 +823,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "client-gateway"
+version = "0.1.0"
+dependencies = [
+ "client-api",
+ "client-core",
+ "futures-util",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "client-media"
 version = "0.1.0"
 dependencies = [
@@ -1573,25 +1588,20 @@ dependencies = [
 name = "discord-client"
 version = "0.1.1"
 dependencies = [
- "bytes",
  "client-api",
  "client-core",
+ "client-gateway",
  "client-media",
  "env_logger",
- "futures-util",
- "hex",
  "libc",
  "log",
  "oto",
- "reqwest",
  "rustls",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tokio",
- "tokio-tungstenite",
- "url",
 ]
 
 [[package]]

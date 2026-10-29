@@ -1,0 +1,20 @@
+[package]
+name = "client-gateway"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Discord Gateway v10 (WebSocket-цикл, heartbeat, resume), OAuth-вход и
+# подписка на список участников — всё без Tauri. Взаимодействие с UI и
+# голосовым слоем идёт через трейты EventSink / VoiceOps (реализации —
+# в src-tauri), поэтому крейт переиспользуется egui-конструктором и MCP.
+[dependencies]
+client-core = { path = "../core" }
+client-api = { path = "../api" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+reqwest = { version = "0.13", features = ["json", "form"] }
+log = "0.4"

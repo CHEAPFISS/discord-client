@@ -22,18 +22,14 @@ client-core = { path = "../crates/core" }
 client-media = { path = "../crates/media" }
 # REST-клиент Discord API (типы, запросы, парсер сообщений) — без Tauri.
 client-api = { path = "../crates/api" }
+# Discord Gateway (WS-цикл), OAuth-вход, участники — без Tauri.
+client-gateway = { path = "../crates/gateway" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
-futures-util = "0.3"
-reqwest = { version = "0.13", features = ["json", "form"] }
-url = "2"
 log = "0.4"
 env_logger = "0.11"
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
-bytes = "1"
-hex = "0.4"
 # Ограничение glibc-арен: у клиента много потоков, иначе malloc раздувает
 # до десятков арен по 64 MB. См. mallopt(M_ARENA_MAX, 2) в main.rs.
 libc = "0.2"

@@ -9,14 +9,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Отправитель сообщений Gateway (op 4, heartbeat и т.д.) — bridges команды к ws-задаче.
+/// Клонируется без копирования: tx в Arc, чтобы контекст шлюза (GatewayCtx)
+/// разделял один канал с Tauri-состоянием.
+#[derive(Clone)]
 pub struct GatewaySender {
-    pub tx: tokio::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>>,
+    pub tx: Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>>>,
 }
 
 impl GatewaySender {
     pub fn new() -> Self {
         Self {
-            tx: tokio::sync::Mutex::new(None),
+            tx: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 

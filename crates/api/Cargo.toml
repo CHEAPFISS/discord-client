@@ -14,3 +14,7 @@ serde_json = "1"
 reqwest = { version = "0.13", features = ["json", "form"] }
 tokio = { version = "1", features = ["rt"] }
 log = "0.4"
+
+# Пробники (examples/) — та же диагностика, что раньше жила в src-tauri.
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

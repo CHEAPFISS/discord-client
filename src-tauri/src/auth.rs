@@ -1,272 +1,28 @@
-use serde::Deserialize;
-use tauri::{command, AppHandle, State};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+//! Tauri-команды входа поверх крейта `client-gateway` (модуль `auth`).
+//!
+//! Вся логика (проверка токена, OAuth-сервер, обмен кода) — в крейте;
+//! здесь только обёртки команд, собирающие контекст из Tauri-состояний.
 
-use crate::gateway::{
-    clone_state, request_gateway_stop, reset_voice_on_identity_change,
-    restart_gateway_for_new_token,
-};
-use discord_client::{DiscordState, GatewaySender};
+use tauri::{command, AppHandle};
 
-/// Адрес callback-сервера OAuth2.
-pub(crate) const REDIRECT_URI: &str = "http://localhost:1436/callback";
+use crate::gateway::make_ctx;
 
-/// Ответ обмена кода на токен. Без Debug: access_token не должен попадать в логи.
-#[derive(Deserialize)]
-pub(crate) struct TokenResponse {
-    pub(crate) access_token: String,
-}
-
-/// Вход по user-токену Discord (полноценный доступ к REST API).
 #[command]
-pub(crate) async fn login_with_token(
-    app: AppHandle,
-    state: State<'_, DiscordState>,
-    sender: State<'_, GatewaySender>,
-    token: String,
-) -> Result<serde_json::Value, String> {
-    let token = token.trim().trim_matches('"').to_string();
-    if token.is_empty() {
-        return Err(crate::i18n::t(crate::i18n::Key::EmptyToken).into());
-    }
-
-    let client = crate::api::http();
-    let resp: serde_json::Value = client
-        .get(format!("{}/users/@me", crate::api::API_BASE))
-        .header("Authorization", &token)
-        .send()
-        .await
-        .map_err(|e| crate::i18n::f(crate::i18n::Key::RequestFailed, &[("e", &e.to_string())]))?
-        .json()
-        .await
-        .map_err(|e| crate::i18n::f(crate::i18n::Key::JsonParse, &[("e", &e.to_string())]))?;
-
-    if resp["code"].is_number() || resp["id"].is_null() {
-        return Err(crate::i18n::f(
-            crate::i18n::Key::TokenRejected,
-            &[
-                (
-                    "message",
-                    resp["message"]
-                        .as_str()
-                        .unwrap_or(crate::i18n::t(crate::i18n::Key::Unknown)),
-                ),
-                ("code", &resp["code"].as_u64().unwrap_or(0).to_string()),
-            ],
-        ));
-    }
-
-    let session = discord_client::DiscordSession {
-        token,
-        user_id: resp["id"].as_str().unwrap_or("").to_string(),
-        username: resp["username"].as_str().unwrap_or("").to_string(),
-    };
-    state.set_session(Some(session.clone()))?;
-
-    // Смена идентичности: гасим голос и перезапускаем gateway под новым токеном.
-    let st = clone_state(&state);
-    reset_voice_on_identity_change(&app, &st).await;
-    restart_gateway_for_new_token(&app, &st, &sender).await;
-
-    Ok(serde_json::json!({
-        "user_id": session.user_id,
-        "username": session.username
-    }))
-}
-
-/// Случайный nonce для OAuth state (16 байт энтропии).
-pub(crate) fn random_oauth_state() -> String {
-    use std::io::Read;
-    let mut buf = [0u8; 16];
-    if std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut buf))
-        .is_err()
-    {
-        let mut acc = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0)
-            ^ (std::process::id() as u64);
-        for b in buf.iter_mut() {
-            acc = acc
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            *b = (acc >> 33) as u8;
-        }
-    }
-    buf.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// Ждём callback с code= и state=; чужой/без state — запрос игнорируется (жмём дальше).
-pub(crate) async fn wait_for_code_on(
-    listener: TcpListener,
-    expected_state: &str,
-) -> Result<String, String> {
-    loop {
-        let (mut stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
-        let mut buf = [0u8; 4096];
-        let n = stream.read(&mut buf).await.map_err(|e| e.to_string())?;
-        let req = String::from_utf8_lossy(&buf[..n]);
-        let first_line = req.lines().next().unwrap_or("");
-
-        // Разбор query: GET /callback?code=...&state=...
-        let query = first_line
-            .split(' ')
-            .nth(1)
-            .unwrap_or_default()
-            .split('?')
-            .nth(1)
-            .unwrap_or_default();
-        let qparam = |name: &str| -> Option<String> {
-            query.split('&').find_map(|kv| {
-                let mut it = kv.splitn(2, '=');
-                (it.next()? == name).then(|| it.next().unwrap_or_default().to_string())
-            })
-        };
-        let got_code = qparam("code");
-        let got_state = qparam("state");
-
-        let state_ok = got_state.as_deref() == Some(expected_state);
-        // Страницу «Вход выполнен!» показываем только для НАШЕГО callback:
-        // раньше 200 с успехом отдавался и при чужом/устаревшем state.
-        let response_body = if got_code.is_some() && state_ok {
-            format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<html><body style='font-family:sans-serif;background:#36393f;color:#fff;text-align:center;padding-top:80px'><h2>{}</h2><p>{}</p></body></html>",
-                crate::i18n::t(crate::i18n::Key::OAuthSuccess),
-                crate::i18n::t(crate::i18n::Key::OAuthReturn)
-            )
-        } else if got_code.is_some() {
-            format!(
-                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<html><body style='font-family:sans-serif;background:#36393f;color:#fff;text-align:center;padding-top:80px'><h2>{}</h2></body></html>",
-                crate::i18n::t(crate::i18n::Key::OAuthBadState)
-            )
-        } else {
-            "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n<!doctype html><html><body>listening for callback...</body></html>\r\n".to_string()
-        };
-        let _ = stream.write_all(response_body.as_bytes()).await;
-
-        match (got_code, got_state) {
-            (Some(code), Some(state)) if state == expected_state => return Ok(code),
-            (Some(_), _) => {
-                log::warn!("OAuth: callback без state/с неверным state — игнорирую");
-                continue;
-            }
-            _ => continue,
-        }
-    }
+pub async fn login_with_token(app: AppHandle, token: String) -> Result<serde_json::Value, String> {
+    client_gateway::login_with_token(&make_ctx(&app), &token).await
 }
 
 #[command]
-pub(crate) async fn start_login(
-    state: State<'_, DiscordState>,
-) -> Result<serde_json::Value, String> {
-    let cfg = discord_client::read_oauth_config()?;
-
-    // 1. Открываем браузер для авторизации (state — защита callback от подмены)
-    let state_token = random_oauth_state();
-    let auth_url = format!(
-        "https://discord.com/oauth2/authorize?client_id={}&response_type=code&redirect_uri={}&scope=identify%20guilds&state={}",
-        cfg.client_id,
-        REDIRECT_URI.replace(':', "%3A").replace('/', "%2F"),
-        state_token
-    );
-
-    let listener: TcpListener = TcpListener::bind("127.0.0.1:1436")
-        .await
-        .map_err(|e| crate::i18n::f(crate::i18n::Key::PortBusy, &[("e", &e.to_string())]))?;
-
-    std::process::Command::new("xdg-open")
-        .arg(&auth_url)
-        .spawn()
-        .map_err(|e| {
-            crate::i18n::f(
-                crate::i18n::Key::BrowserOpenFailed,
-                &[("e", &e.to_string())],
-            )
-        })?;
-
-    // Таймаут: если пользователь не вернулся из браузера, логин не должен
-    // висеть вечно и удерживать порт 1436.
-    let code = tokio::time::timeout(
-        std::time::Duration::from_secs(600),
-        wait_for_code_on(listener, &state_token),
-    )
-    .await
-    .map_err(|_| crate::i18n::t(crate::i18n::Key::LoginCancelled).to_string())??;
-
-    // 2. Обмен кода на токен
-    let client = crate::api::http();
-    let params = [
-        ("client_id", cfg.client_id.as_str()),
-        ("client_secret", cfg.client_secret.as_str()),
-        ("grant_type", "authorization_code"),
-        ("code", code.as_str()),
-        ("redirect_uri", crate::auth::REDIRECT_URI),
-    ];
-
-    let token_resp: TokenResponse = client
-        .post(format!("{}/oauth2/token", crate::api::API_BASE))
-        .form(&params)
-        .send()
-        .await
-        .map_err(|e| crate::i18n::f(crate::i18n::Key::OAuthHttp, &[("e", &e.to_string())]))?
-        .json()
-        .await
-        .map_err(|e| crate::i18n::f(crate::i18n::Key::TokenParse, &[("e", &e.to_string())]))?;
-
-    // 3. Информация о пользователе
-    #[derive(Debug, Deserialize)]
-    struct UserInfo {
-        id: String,
-        username: String,
-    }
-
-    let user: UserInfo = client
-        .get(format!("{}/users/@me", crate::api::API_BASE))
-        .bearer_auth(&token_resp.access_token)
-        .send()
-        .await
-        .map_err(|e| crate::i18n::f(crate::i18n::Key::UserRequest, &[("e", &e.to_string())]))?
-        .json()
-        .await
-        .map_err(|e| crate::i18n::f(crate::i18n::Key::UserParse, &[("e", &e.to_string())]))?;
-
-    // 4. Сохраняем сессию
-    let session = discord_client::DiscordSession {
-        token: token_resp.access_token,
-        user_id: user.id,
-        username: user.username,
-    };
-    state.set_session(Some(session.clone()))?;
-
-    Ok(serde_json::json!({
-        "user_id": session.user_id,
-        "username": session.username,
-    }))
+pub async fn start_login(app: AppHandle) -> Result<serde_json::Value, String> {
+    client_gateway::start_login(&make_ctx(&app).state).await
 }
 
 #[command]
-pub(crate) async fn logout(
-    app: AppHandle,
-    state: State<'_, DiscordState>,
-    sender: State<'_, GatewaySender>,
-) -> Result<(), String> {
-    let st = clone_state(&state);
-    reset_voice_on_identity_change(&app, &st).await;
-    // останавливаем gateway-цикл (новый стартует после следующего логина)
-    request_gateway_stop(&sender, std::time::Duration::from_secs(5)).await;
-    state.set_session(None)
+pub async fn logout(app: AppHandle) -> Result<(), String> {
+    client_gateway::logout(&make_ctx(&app)).await
 }
 
 #[command]
-pub(crate) fn get_me(state: State<'_, DiscordState>) -> Result<serde_json::Value, String> {
-    let guard = state.session.lock().unwrap();
-    let s = guard
-        .as_ref()
-        .ok_or(crate::i18n::t(crate::i18n::Key::NotLoggedIn))?;
-    Ok(serde_json::json!({
-        "user_id": s.user_id,
-        "username": s.username
-    }))
+pub fn get_me(app: AppHandle) -> Result<serde_json::Value, String> {
+    client_gateway::get_me(&make_ctx(&app).state)
 }
