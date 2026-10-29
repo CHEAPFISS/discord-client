@@ -20,7 +20,7 @@
     "check": "npm run fe:check && npm run i18n:check && npm run fe:build"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.12.3",
+    "@tauri-apps/cli": "^2.12.4",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
   },
