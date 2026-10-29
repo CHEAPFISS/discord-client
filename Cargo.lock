@@ -800,6 +800,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "client-api"
+version = "0.1.0"
+dependencies = [
+ "client-core",
+ "log",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "client-core"
 version = "0.1.0"
 dependencies = [
@@ -1562,6 +1574,7 @@ name = "discord-client"
 version = "0.1.1"
 dependencies = [
  "bytes",
+ "client-api",
  "client-core",
  "client-media",
  "env_logger",

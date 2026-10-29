@@ -4,6 +4,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/api",
     "crates/core",
     "crates/media",
     "src-tauri",
