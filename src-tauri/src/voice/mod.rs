@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{command, AppHandle, Emitter, Manager, State};
 
-use crate::audio::mic::MicSource;
+use client_media::audio::mic::MicSource;
 use discord_client::{DiscordState, GatewaySender};
 
 pub mod connect;

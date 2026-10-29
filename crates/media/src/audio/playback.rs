@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 /// Дрейф часов: consumed — колбэк (локальный DAC), produced — декод (RTP).
 /// При N одновременно говорящих produced ≈ N×consumed, отрицательный сдвиг
 /// drift'а при миксе — норма; смысл метрики — при одиночном говорящем.
-pub(crate) async fn play_audio_task(rx: mpsc::Receiver<(u64, Vec<u8>, u8)>) -> Result<(), String> {
+pub async fn play_audio_task(rx: mpsc::Receiver<(u64, Vec<u8>, u8)>) -> Result<(), String> {
     let handle =
         tokio::task::spawn_blocking(move || -> Result<(), String> { play_audio_blocking(rx) });
     handle
@@ -52,7 +52,7 @@ fn play_audio_blocking(mut rx: mpsc::Receiver<(u64, Vec<u8>, u8)>) -> Result<(),
     let host = cpal::default_host();
     let device = host
         .default_output_device()
-        .ok_or(crate::i18n::t(crate::i18n::Key::NoOutputAudio))?;
+        .ok_or(client_core::i18n::t(client_core::i18n::Key::NoOutputAudio))?;
 
     let mut chosen = None;
     'ranges: for range in device
@@ -73,7 +73,12 @@ fn play_audio_blocking(mut rx: mpsc::Receiver<(u64, Vec<u8>, u8)>) -> Result<(),
             .default_output_config()
             .ok()
             .map(|d| d.config())
-            .unwrap_or_else(|| panic!("{}", crate::i18n::t(crate::i18n::Key::NoOutputConfig)))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}",
+                    client_core::i18n::t(client_core::i18n::Key::NoOutputConfig)
+                )
+            })
     });
     if config.sample_rate != 48000 || config.channels != 2 {
         log::warn!(

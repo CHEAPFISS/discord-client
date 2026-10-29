@@ -11,12 +11,15 @@ default = []
 # Ubuntu 24.04 ships libjpeg-turbo 2.x, while turbojpeg-sys requires >= 3.0.
 # CI enables this feature to build the copy bundled with the crate; local Arch
 # builds keep using the system library through pkg-config.
-bundled-turbojpeg = ["turbojpeg/cmake", "turbojpeg/require-simd"]
+# turbojpeg живёт в crates/media — пробрасываем фичу туда.
+bundled-turbojpeg = ["client-media/bundled-turbojpeg"]
 
 [dependencies]
 tauri = { version = "2", features = [] }
 # Ядро бэкенда (типы, состояние, парсеры, i18n) — без Tauri, переиспользуется.
 client-core = { path = "../crates/core" }
+# Аудио/видеопайплайн (декод H264, JPEG, микшер, микрофон) — без Tauri.
+client-media = { path = "../crates/media" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -24,7 +27,6 @@ tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 reqwest = { version = "0.13", features = ["json", "form"] }
 url = "2"
-nnnoiseless = "0.5"
 log = "0.4"
 env_logger = "0.11"
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
@@ -33,25 +35,10 @@ hex = "0.4"
 # Ограничение glibc-арен: у клиента много потоков, иначе malloc раздувает
 # до десятков арен по 64 MB. См. mallopt(M_ARENA_MAX, 2) в main.rs.
 libc = "0.2"
-# opus = { version = "0.1", optional = true }  # требует libopus в системе — подключим на этапе звука
-opus = "0.4"
-cpal = "0.18"
-
 # Голосовой транспорт Discord: Voice Gateway v8 + DAVE (E2EE) + RTP + paced Opus.
 # Без DAVE Discord закрывает voice WS с кодом 4017 "E2EE/DAVE protocol required".
 # Форк (v1.0.0 + диагностика DAVE/приём аудио) вендорен локально: ../vendor/oto
 oto = { path = "../vendor/oto/crates/oto" }
-
-# Декодер H264 для просмотра демок (Фаза 3). Используем СИСТЕМНУЮ
-# libopenh264 (пакет Arch, собран с ассемблером) через динамическую загрузку:
-# встроенная сборка из исходников без nasm/yasm собиралась без ассемблера и в
-# debug-профиле декодировала 1080p 60–120 мс на кадр — очередь кадров рвалась
-# («одна картинка и стоп»). `source` отключаем, включаем `libloading`.
-openh264 = { version = "0.9", default-features = false, features = ["libloading"] }
-# JPEG-кодирование кадров демки перед IPC в webview: системная libturbojpeg
-# (pkg-config, собрана с SIMD) — без cmake-сборки из исходников.
-turbojpeg = { version = "1.5.1", default-features = false, features = ["pkg-config"] }
-fast_image_resize = "6.1.0"
 
 # Нативная WebRTC библиотека — подключим после выбора конкретной реализации
 #пример: webrtc = { version = "0.9", features = ["audio", "video"] }

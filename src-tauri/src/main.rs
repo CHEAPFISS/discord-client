@@ -6,12 +6,9 @@ use tauri::{generate_context, generate_handler};
 pub use discord_client::i18n;
 
 mod api;
-mod audio;
 mod auth;
 mod gateway;
 mod members;
-mod video;
-mod video_render;
 mod voice;
 
 fn main() {

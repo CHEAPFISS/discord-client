@@ -1,0 +1,31 @@
+[package]
+name = "client-media"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = []
+# Ubuntu 24.04 ships libjpeg-turbo 2.x, while turbojpeg-sys requires >= 3.0 —
+# тогда собираем вендоренную копию (нужен cmake); иначе — системная через
+# pkg-config (Arch и CI с этим флагом).
+bundled-turbojpeg = ["turbojpeg/cmake", "turbojpeg/require-simd"]
+
+# Аудио- и видеопайплайн бэкенда: декод/кодеки, микшер, микрофон.
+# Без Tauri — отправка кадров в UI идёт через VideoFrameSink из client-core.
+[dependencies]
+client-core = { path = "../core" }
+log = "0.4"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+
+# Аудио: захват (cpal), шумодав (RNNoise), Opus, вывод через oto.
+cpal = "0.18"
+nnnoiseless = "0.5"
+opus = "0.4"
+oto = { path = "../../vendor/oto/crates/oto" }
+
+# Видео: декод H264 (системная libopenh264 через libloading), JPEG (системный
+# libturbojpeg), даунскейл YUV (SIMD fast_image_resize).
+openh264 = { version = "0.9", default-features = false, features = ["libloading"] }
+turbojpeg = { version = "1.5.1", default-features = false, features = ["pkg-config"] }
+fast_image_resize = "6.1.0"

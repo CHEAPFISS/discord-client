@@ -10,7 +10,7 @@ use oto::{FrameSource, FrameStatus};
 /// Микрофон: cpal-capture → кольцевая буфер → Opus-кадр 20 мс / 48 кГц.
 /// poll_frame не спит и не блокирует: недостатке данных — Pending (oto подождёт
 /// своего следующего тика, пауза заполняется тишиной).
-pub(crate) struct MicSource {
+pub struct MicSource {
     /// Готовые закодированные кадры, выкладываемые рабочим потоком (FIFO).
     encoded: Arc<Mutex<VecDeque<Vec<u8>>>>,
     /// Waker пасера oto: poll регистрирует себя, когда очередь пуста; рабочий
@@ -22,11 +22,11 @@ pub(crate) struct MicSource {
     stop_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
-pub(crate) const MIC_FRAME_SAMPLES: usize = 960; // 20 мс моно при 48 кГц
-                                                 // Потолок ~80 мс: часы микрофона и пасера расходятся, а пасер после каждого
-                                                 // запаздывания пере-планирует дедлайн «от текущего момента» — без жёсткого
-                                                 // потолка задержка растёт бесконечно (и целиком остаётся после unmute).
-pub(crate) const MIC_RING_MAX: usize = MIC_FRAME_SAMPLES * 4;
+pub const MIC_FRAME_SAMPLES: usize = 960; // 20 мс моно при 48 кГц
+                                          // Потолок ~80 мс: часы микрофона и пасера расходятся, а пасер после каждого
+                                          // запаздывания пере-планирует дедлайн «от текущего момента» — без жёсткого
+                                          // потолка задержка растёт бесконечно (и целиком остаётся после unmute).
+pub const MIC_RING_MAX: usize = MIC_FRAME_SAMPLES * 4;
 
 /// VAD обводки «говорю сам»: RMS кадра захвата (после RNNoise, EMA-сглаживание).
 /// Гистерезис: речь включается громче attack, гаснет тише release — индикатор
@@ -35,11 +35,11 @@ const SELF_VAD_ATTACK: f32 = 0.02;
 const SELF_VAD_RELEASE: f32 = 0.008;
 
 impl MicSource {
-    pub(crate) fn new(on_loud: std::sync::Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
+    pub fn new(on_loud: std::sync::Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
-            .ok_or(crate::i18n::t(crate::i18n::Key::NoInputAudio))?;
+            .ok_or(client_core::i18n::t(client_core::i18n::Key::NoInputAudio))?;
 
         let mut chosen = None;
         'cfg: for range in device
@@ -56,7 +56,7 @@ impl MicSource {
             }
         }
         let config = chosen
-            .ok_or(crate::i18n::t(crate::i18n::Key::NoMicConfig))?
+            .ok_or(client_core::i18n::t(client_core::i18n::Key::NoMicConfig))?
             .config();
 
         let ring: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
@@ -199,8 +199,8 @@ impl MicSource {
                     }
                 })
                 .map_err(|e| {
-                    crate::i18n::f(
-                        crate::i18n::Key::MicEncodeTask,
+                    client_core::i18n::f(
+                        client_core::i18n::Key::MicEncodeTask,
                         &[("e", &e.to_string())],
                     )
                 })?;
@@ -276,8 +276,8 @@ impl MicSource {
                     });
             if let Err(e) = stream_result {
                 stop_encode();
-                return Err(crate::i18n::f(
-                    crate::i18n::Key::MicStreamTask,
+                return Err(client_core::i18n::f(
+                    client_core::i18n::Key::MicStreamTask,
                     &[("e", &e.to_string())],
                 ));
             }
@@ -290,7 +290,9 @@ impl MicSource {
             }
             Err(_) => {
                 stop_encode();
-                return Err(crate::i18n::t(crate::i18n::Key::MicStreamEnded).to_string());
+                return Err(
+                    client_core::i18n::t(client_core::i18n::Key::MicStreamEnded).to_string()
+                );
             }
         }
 

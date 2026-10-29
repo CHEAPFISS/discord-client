@@ -2,8 +2,8 @@ use serde_json::json;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::audio::playback::play_audio_task;
 use crate::voice::{attach_mic_task, clear_speaking, request_voice_rejoin};
+use client_media::audio::playback::play_audio_task;
 use discord_client::DiscordState;
 
 /// Подменяет voice-эндпоинт только в debug-сборке — для локального

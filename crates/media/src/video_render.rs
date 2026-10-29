@@ -17,29 +17,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use client_core::VideoFrameSink;
-
 use crate::video::StreamDecoder;
 
-/// Адаптер Tauri-канала под [`VideoFrameSink`] ядра: ядро шлёт кадры через
-/// трейт, а здесь превращаем их в `Channel<InvokeResponseBody>` для webview.
-pub struct TauriVideoSink(tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>);
-
-impl TauriVideoSink {
-    pub fn new(channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>) -> Arc<Self> {
-        Arc::new(Self(channel))
-    }
-}
-
-impl VideoFrameSink for TauriVideoSink {
-    fn send_frame(&self, payload: Vec<u8>) -> Result<(), String> {
-        self.0
-            .send(tauri::ipc::InvokeResponseBody::Raw(payload))
-            .map_err(|e| e.to_string())
-    }
-}
-
 /// Бинарный канал кадров: фронт создаёт его командой `stream_video_attach`.
+/// Слот ядра — сюда попадает адаптер Tauri-слоя (см. `TauriVideoSink` в
+/// src-tauri), здесь кадры уходят только через [`client_core::VideoFrameSink`].
 pub type VideoChannelSlot = client_core::VideoChannelSlot;
 
 /// Вместимость очереди кадров между насосом oto и декодер-таском. Достаточно

@@ -2,8 +2,28 @@ use serde_json::json;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::video_render;
+use client_core::VideoFrameSink;
+use client_media::video_render;
 use discord_client::{DiscordState, StreamTarget};
+
+/// Адаптер Tauri-канала под [`VideoFrameSink`] ядра: ядро шлёт кадры видео
+/// через трейт, здесь они превращаются в `Channel<InvokeResponseBody>` —
+/// ArrayBuffer на фронте без JSON-оверхеда.
+struct TauriVideoSink(tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>);
+
+impl TauriVideoSink {
+    fn new(channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self(channel))
+    }
+}
+
+impl VideoFrameSink for TauriVideoSink {
+    fn send_frame(&self, payload: Vec<u8>) -> Result<(), String> {
+        self.0
+            .send(tauri::ipc::InvokeResponseBody::Raw(payload))
+            .map_err(|e| e.to_string())
+    }
+}
 
 /// RTC-подключение к стриму (Go Live), который мы смотрим.
 ///
@@ -433,8 +453,7 @@ pub(crate) async fn stream_video_attach(
     channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
 ) -> Result<(), String> {
     let state: tauri::State<'_, DiscordState> = app.state();
-    *state.stream_video_channel.lock().unwrap() =
-        Some(crate::video_render::TauriVideoSink::new(channel));
+    *state.stream_video_channel.lock().unwrap() = Some(TauriVideoSink::new(channel));
     log::info!("Stream video: канал кадров подключён фронтом");
     Ok(())
 }

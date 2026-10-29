@@ -811,6 +811,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "client-media"
+version = "0.1.0"
+dependencies = [
+ "client-core",
+ "cpal",
+ "fast_image_resize",
+ "log",
+ "nnnoiseless",
+ "openh264",
+ "opus",
+ "oto",
+ "tokio",
+ "turbojpeg",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1547,16 +1563,12 @@ version = "0.1.1"
 dependencies = [
  "bytes",
  "client-core",
- "cpal",
+ "client-media",
  "env_logger",
- "fast_image_resize",
  "futures-util",
  "hex",
  "libc",
  "log",
- "nnnoiseless",
- "openh264",
- "opus",
  "oto",
  "reqwest",
  "rustls",
@@ -1566,7 +1578,6 @@ dependencies = [
  "tauri-build",
  "tokio",
  "tokio-tungstenite",
- "turbojpeg",
  "url",
 ]
 
