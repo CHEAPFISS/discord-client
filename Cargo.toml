@@ -1,0 +1,13 @@
+# Workspace: единые зависимости, Cargo.lock и target/ для всех крейтов проекта.
+# Tauri-клиент (src-tauri), egui-конструктор (tools/ui-tree) и вынесенный бэкенд
+# (crates/*) собираются вместе — так они видят общие типы и версии крейтов.
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri",
+    "tools/ui-tree",
+]
+# Вендоренный форк oto — отдельный workspace со своими правилами наследования.
+exclude = [
+    "vendor",
+]
