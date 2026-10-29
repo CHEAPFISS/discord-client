@@ -1,6 +1,6 @@
 //! Текстовая нода.
 
-use egui::{Align2, FontId, Pos2, Ui, Vec2};
+use egui::{Align2, Pos2, Ui, Vec2};
 
 use crate::node::{BaseNode, Node, NodeCtx, World};
 use crate::nodes::build_children;
@@ -65,7 +65,7 @@ impl Node for LabelNode {
             world.origin,
             Align2::LEFT_TOP,
             &self.text,
-            FontId::proportional((self.font_size * world.scale).max(6.0)),
+            theme::font(self.font_size, world.scale),
             theme::TEXT,
         );
     }

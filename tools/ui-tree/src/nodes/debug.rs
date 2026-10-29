@@ -1,6 +1,6 @@
 //! Отладочная нода: память, зум, команды канвасу.
 
-use egui::{Align2, Color32, CornerRadius, FontId, Id, Sense, Ui, Vec2};
+use egui::{Align2, Color32, CornerRadius, Id, Sense, Ui, Vec2};
 
 use crate::node::{BaseNode, Command, Node, NodeCtx, World};
 use crate::nodes::build_children;
@@ -43,8 +43,8 @@ impl Node for DebugNode {
     fn draw(&mut self, ui: &mut Ui, world: World, ctx: &mut NodeCtx) {
         let scale = world.scale;
         let painter = ui.painter().clone();
-        let mono = FontId::monospace((12.0 * scale).max(6.0));
-        let small = FontId::proportional((10.0 * scale).max(5.0));
+        let mono = theme::mono(12.0, scale);
+        let small = theme::font(10.0, scale);
 
         painter.text(
             world.point(Vec2::ZERO),
@@ -59,7 +59,10 @@ impl Node for DebugNode {
         painter.text(
             world.point(Vec2::new(0.0, 18.0)),
             Align2::LEFT_TOP,
-            format!("зум {:.2} · нод {}", ctx.stats.zoom, ctx.stats.node_count),
+            format!(
+                "зум {:.2} · нод {} · кадр {:.1} ms",
+                ctx.stats.zoom, ctx.stats.node_count, ctx.stats.frame_ms
+            ),
             small.clone(),
             theme::MUTED,
         );
@@ -185,7 +188,7 @@ fn action_button(
         rect.center(),
         Align2::CENTER_CENTER,
         label,
-        FontId::proportional((12.0 * scale).max(6.0)),
+        theme::font(12.0, scale),
         if accent { Color32::BLACK } else { theme::TEXT },
     );
     response.clicked()

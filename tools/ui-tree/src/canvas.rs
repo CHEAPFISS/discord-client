@@ -181,22 +181,31 @@ impl Canvas {
         self.view_scale = scale;
     }
 
+    /// Сетка с адаптивным шагом: при отдалении шаг удваивается, пока
+    /// расстояние между точками на экране не станет >= 16 px. Без этого
+    /// зум наружу рисовал до ~11k точек за кадр.
     fn draw_grid(&self, painter: &egui::Painter, rect: Rect) {
-        const STEP: f32 = 32.0;
+        const BASE: f32 = 32.0;
+        const MIN_SCREEN_STEP: f32 = 16.0;
+        let mut step = BASE;
+        while step * self.view_scale < MIN_SCREEN_STEP {
+            step *= 2.0;
+        }
         let min = (rect.min - self.view_origin) / self.view_scale;
         let max = (rect.max - self.view_origin) / self.view_scale;
-        let x0 = (min.x / STEP).floor() as i32;
-        let x1 = (max.x / STEP).ceil() as i32;
-        let y0 = (min.y / STEP).floor() as i32;
-        let y1 = (max.y / STEP).ceil() as i32;
-        if (x1 - x0) as i64 * (y1 - y0) as i64 > 20_000 {
+        let x0 = (min.x / step).floor() as i32;
+        let x1 = (max.x / step).ceil() as i32;
+        let y0 = (min.y / step).floor() as i32;
+        let y1 = (max.y / step).ceil() as i32;
+        // Страховка: при сильном зуме внутрь точек всё равно немного.
+        if (x1 - x0) as i64 * (y1 - y0) as i64 > 5_000 {
             return;
         }
         let radius = (1.2 * self.view_scale).clamp(0.6, 2.0);
         for ix in x0..=x1 {
             for iy in y0..=y1 {
                 let point = self.view_origin
-                    + Vec2::new(ix as f32 * STEP, iy as f32 * STEP) * self.view_scale;
+                    + Vec2::new(ix as f32 * step, iy as f32 * step) * self.view_scale;
                 painter.circle_filled(point, radius, theme::GRID);
             }
         }

@@ -1,6 +1,6 @@
 //! Простой вертикальный список строк с выбором.
 
-use egui::{Align2, CornerRadius, FontId, Id, Sense, Ui, Vec2};
+use egui::{Align2, CornerRadius, Id, Sense, Ui, Vec2};
 
 use crate::node::{BaseNode, Node, NodeCtx, World};
 use crate::nodes::build_children;
@@ -93,7 +93,7 @@ impl Node for ListNode {
                 row.left_center() + Vec2::new(8.0 * scale, 0.0),
                 Align2::LEFT_CENTER,
                 item,
-                FontId::proportional((13.0 * scale).max(6.0)),
+                theme::font(13.0, scale),
                 if selected { theme::TEXT } else { theme::MUTED },
             );
             if response.clicked() {

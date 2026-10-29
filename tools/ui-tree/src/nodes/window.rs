@@ -1,8 +1,8 @@
 //! Окно: рамка, заголовок, перетаскивание, закрытие и свой масштаб.
 
 use egui::{
-    Align2, Color32, CornerRadius, CursorIcon, FontId, Id, Painter, Rect, Sense, Stroke,
-    StrokeKind, Ui, Vec2,
+    Align2, Color32, CornerRadius, CursorIcon, Id, Painter, Rect, Sense, Stroke, StrokeKind, Ui,
+    Vec2,
 };
 
 use crate::node::{BaseNode, Node, NodeCtx, World};
@@ -102,7 +102,7 @@ impl Node for WindowNode {
             Stroke::new(2.0 * scale, theme::ACCENT),
         );
 
-        let title_font = FontId::proportional((14.0 * scale).max(7.0));
+        let title_font = theme::font(14.0, scale);
         painter.text(
             header.left_center() + Vec2::new(12.0 * scale, 0.0),
             Align2::LEFT_CENTER,
@@ -214,7 +214,7 @@ fn title_button(
         rect.center(),
         Align2::CENTER_CENTER,
         label,
-        FontId::proportional((15.0 * scale).max(7.0)),
+        theme::font(15.0, scale),
         if response.hovered() {
             theme::TEXT
         } else {

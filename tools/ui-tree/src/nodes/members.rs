@@ -1,6 +1,6 @@
 //! Участники сервера: онлайн/офлайн (заглушки).
 
-use egui::{Align2, FontId, Ui, Vec2};
+use egui::{Align2, Ui, Vec2};
 
 use crate::mock;
 use crate::node::{BaseNode, Node, NodeCtx, World};
@@ -76,7 +76,7 @@ fn section(painter: &egui::Painter, world: World, y: &mut f32, text: &str, scale
         world.point(Vec2::new(0.0, *y)),
         Align2::LEFT_TOP,
         text,
-        FontId::proportional((10.0 * scale).max(5.0)),
+        theme::font(10.0, scale),
         theme::MUTED,
     );
     *y += 18.0;
@@ -99,7 +99,7 @@ fn member_row(
         world.point(Vec2::new(16.0, *y)),
         Align2::LEFT_TOP,
         name,
-        FontId::proportional((13.0 * scale).max(6.0)),
+        theme::font(13.0, scale),
         theme::TEXT,
     );
     *y += 22.0;

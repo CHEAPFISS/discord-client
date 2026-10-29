@@ -1,6 +1,6 @@
 //! Кнопка: рисует себя и отправляет действие в лог.
 
-use egui::{Align2, Color32, CornerRadius, FontId, Id, Sense, Stroke, StrokeKind, Ui, Vec2};
+use egui::{Align2, Color32, CornerRadius, Id, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::node::{BaseNode, Node, NodeCtx, World};
 use crate::nodes::build_children;
@@ -92,7 +92,7 @@ impl Node for ButtonNode {
             rect.center(),
             Align2::CENTER_CENTER,
             &self.text,
-            FontId::proportional((13.0 * scale).max(6.0)),
+            theme::font(13.0, scale),
             if response.hovered() {
                 Color32::BLACK
             } else {

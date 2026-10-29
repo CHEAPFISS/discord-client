@@ -37,6 +37,14 @@ struct App {
     stats: Stats,
     last_mem: Instant,
     last_save: Instant,
+    /// `UI_TREE_WIGGLE=1` — каждый кадр меняет масштаб холста.
+    /// Это нагрузочный кейс для замера лагов зума.
+    wiggle: bool,
+    start: Instant,
+    frames: u32,
+    frame_sum: f32,
+    frame_max: f32,
+    report: Instant,
 }
 
 impl App {
@@ -61,15 +69,29 @@ impl App {
                 rss_mb: rss,
                 node_count: 0,
                 zoom: 1.0,
+                frame_ms: 0.0,
             },
             last_mem: Instant::now(),
             last_save: Instant::now(),
+            wiggle: std::env::var_os("UI_TREE_WIGGLE").is_some(),
+            start: Instant::now(),
+            frames: 0,
+            frame_sum: 0.0,
+            frame_max: 0.0,
+            report: Instant::now(),
         }
     }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Нагрузочный кейс: масштаб меняется каждый кадр, как при зуме колесом.
+        if self.wiggle {
+            let t = self.start.elapsed().as_secs_f32();
+            self.canvas.view_scale = 0.7 + 0.3 * (t * 2.0).sin();
+            ui.ctx().request_repaint();
+        }
+
         if self.last_mem.elapsed() >= Duration::from_secs(1) {
             let (rss, pss) = read_mem();
             self.stats.rss_mb = rss;
@@ -77,7 +99,26 @@ impl eframe::App for App {
             self.last_mem = Instant::now();
         }
         self.stats.zoom = self.canvas.view_scale;
+        self.stats.frame_ms = ui.input(|i| i.unstable_dt) * 1000.0;
         self.canvas.render(ui, &self.stats);
+
+        if self.wiggle {
+            self.frames += 1;
+            self.frame_sum += self.stats.frame_ms;
+            self.frame_max = self.frame_max.max(self.stats.frame_ms);
+            if self.report.elapsed() >= Duration::from_secs(2) {
+                eprintln!(
+                    "wiggle: кадров {} · avg {:.1} ms · max {:.1} ms",
+                    self.frames,
+                    self.frame_sum / self.frames.max(1) as f32,
+                    self.frame_max
+                );
+                self.frames = 0;
+                self.frame_sum = 0.0;
+                self.frame_max = 0.0;
+                self.report = Instant::now();
+            }
+        }
 
         // Автосохранение: не чаще раза в секунду и только при изменениях.
         let save_due = self.canvas.save_requested

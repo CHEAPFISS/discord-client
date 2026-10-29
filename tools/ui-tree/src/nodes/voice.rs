@@ -1,6 +1,6 @@
 //! Список голосовых каналов и кто в них сидит (заглушки).
 
-use egui::{Align2, CornerRadius, FontId, Id, Sense, Ui, Vec2};
+use egui::{Align2, CornerRadius, Id, Sense, Ui, Vec2};
 
 use crate::mock;
 use crate::node::{BaseNode, Node, NodeCtx, World};
@@ -50,7 +50,7 @@ impl Node for VoiceNode {
             world.point(Vec2::new(0.0, y)),
             Align2::LEFT_TOP,
             "ГОЛОСОВЫЕ КАНАЛЫ",
-            FontId::proportional((10.0 * scale).max(5.0)),
+            theme::font(10.0, scale),
             theme::MUTED,
         );
         y += 20.0;
@@ -76,14 +76,14 @@ impl Node for VoiceNode {
                 row.left_center() + Vec2::new(4.0 * scale, 0.0),
                 Align2::LEFT_CENTER,
                 "▾",
-                FontId::proportional((11.0 * scale).max(5.0)),
+                theme::font(11.0, scale),
                 theme::MUTED,
             );
             painter.text(
                 row.left_center() + Vec2::new(20.0 * scale, 0.0),
                 Align2::LEFT_CENTER,
                 channel.name,
-                FontId::proportional((13.0 * scale).max(6.0)),
+                theme::font(13.0, scale),
                 theme::ACCENT_LIGHT,
             );
             y += 24.0;
@@ -102,7 +102,7 @@ impl Node for VoiceNode {
                     row.left_center(),
                     Align2::LEFT_CENTER,
                     *user,
-                    FontId::proportional((12.0 * scale).max(6.0)),
+                    theme::font(12.0, scale),
                     theme::TEXT,
                 );
                 y += 20.0;

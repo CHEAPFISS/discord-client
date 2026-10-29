@@ -1,6 +1,6 @@
 //! Рейл серверов (заглушки).
 
-use egui::{Align2, CornerRadius, FontId, Id, Sense, Ui, Vec2};
+use egui::{Align2, CornerRadius, Id, Sense, Ui, Vec2};
 
 use crate::mock;
 use crate::node::{BaseNode, Node, NodeCtx, World};
@@ -94,7 +94,7 @@ impl Node for ServersNode {
                 rect.center(),
                 Align2::CENTER_CENTER,
                 name,
-                FontId::proportional((15.0 * scale).max(7.0)),
+                theme::font(15.0, scale),
                 if selected {
                     egui::Color32::BLACK
                 } else {
