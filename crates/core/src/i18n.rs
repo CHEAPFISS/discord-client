@@ -224,7 +224,9 @@ pub fn f(key: Key, vars: &[(&str, &str)]) -> String {
 }
 
 /// Called by the frontend on startup and on every language change.
-#[tauri::command]
+///
+/// Tauri-обёртка этой функции живёт в `src-tauri` (команда `set_language`):
+/// ядро не зависит от Tauri.
 pub fn set_language(lang: String) {
     log::debug!("set_language called with {lang:?}");
     set(&lang);

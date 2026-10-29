@@ -800,6 +800,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "client-core"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "oto",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1535,6 +1546,7 @@ name = "discord-client"
 version = "0.1.1"
 dependencies = [
  "bytes",
+ "client-core",
  "cpal",
  "env_logger",
  "fast_image_resize",

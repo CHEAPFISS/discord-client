@@ -15,6 +15,8 @@ bundled-turbojpeg = ["turbojpeg/cmake", "turbojpeg/require-simd"]
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# Ядро бэкенда (типы, состояние, парсеры, i18n) — без Tauri, переиспользуется.
+client-core = { path = "../crates/core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -56,40 +58,3 @@ fast_image_resize = "6.1.0"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-
-# Наш код в debug собирается с -O1: горячий путь видео (копия 8 МБ RGBA-кадра
-# каждый кадр) на -O0 отнимал заметные миллисекунды; отладка при этом остаётся.
-[profile.dev]
-opt-level = 1
-# line-tables-only вместо полного debuginfo: линковка dev-бинарника
-# заметно быстрее, а имён функций и строк в стектрейсах достаточно.
-debug = "line-tables-only"
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-
-# DSP-зависимости в debug-сборке: без оптимизации nnnoiseless не влезает в
-# контракт poll (≤2 мс на кадр) — oto считает это сбоем и роняет отправку.
-[profile.dev.package.nnnoiseless]
-opt-level = 3
-# fast_image_resize (даунскейл YUV в горячем пути видео): SIMD-свёртка на
-# -O2 давала ~14 мс на кадр — на -O3 быстрее.
-[profile.dev.package.fast_image_resize]
-opt-level = 3
-# cargo test работает в профиль test — продублируем override, иначе бенч
-# daunskayla меряется на -O2/-O1 и врёт (Box: 15 мс вместо ~4).
-[profile.test.package.fast_image_resize]
-opt-level = 3
-# Оптимизировать все зависимости (libopus, ring, …): unoptimized libopus тоже
-# периодически вылезал за 2 мс CPU на кадр → FrameSourceContract каждый ~3 мин.
-[profile.dev.package."*"]
-opt-level = 2
-
-# C-код openh264 компилируется build-скриптом (cc) и по умолчанию собирается
-# вообще без оптимизации: 1080p в debug декодировался 67–127 мс на кадр —
-# 30 fps недостижимы, очередь кадров рвалась. build-override задаёт opt-level
-# для компиляции внутри build-скриптов (и их C-исходников).
-[profile.dev.build-override]
-opt-level = 3

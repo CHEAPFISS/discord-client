@@ -44,8 +44,8 @@ fn main() {
         .manage(DiscordState::load_or_default())
         .manage(GatewaySender::new())
         .invoke_handler(generate_handler![
-            // i18n
-            i18n::set_language,
+            // i18n (обёртка команды — в Tauri-слое, crates/core без Tauri)
+            discord_client::commands::set_language,
             // API
             api::get_guilds,
             api::get_channels,

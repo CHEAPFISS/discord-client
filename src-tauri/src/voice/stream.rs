@@ -433,7 +433,8 @@ pub(crate) async fn stream_video_attach(
     channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
 ) -> Result<(), String> {
     let state: tauri::State<'_, DiscordState> = app.state();
-    *state.stream_video_channel.lock().unwrap() = Some(channel);
+    *state.stream_video_channel.lock().unwrap() =
+        Some(crate::video_render::TauriVideoSink::new(channel));
     log::info!("Stream video: канал кадров подключён фронтом");
     Ok(())
 }

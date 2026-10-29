@@ -1,0 +1,16 @@
+[package]
+name = "client-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Ядро бэкенда: типы, общее состояние, сессия, парсеры Discord, i18n.
+# Намеренно БЕЗ зависимости от Tauri — его переиспользуют egui-конструктор
+# (tools/ui-tree) и будущий MCP-сервер. Адаптеры под Tauri живут в src-tauri.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync"] }
+log = "0.4"
+# Форк oto (голосовой транспорт) вендорен в репозиторий.
+oto = { path = "../../vendor/oto/crates/oto" }

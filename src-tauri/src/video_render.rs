@@ -16,12 +16,31 @@
 //! ждём свежий ключевой кадр (один PLI, повторы не чаще 2 с).
 
 use std::sync::{Arc, Mutex};
-use tauri::ipc::{Channel, InvokeResponseBody};
+
+use client_core::VideoFrameSink;
 
 use crate::video::StreamDecoder;
 
+/// Адаптер Tauri-канала под [`VideoFrameSink`] ядра: ядро шлёт кадры через
+/// трейт, а здесь превращаем их в `Channel<InvokeResponseBody>` для webview.
+pub struct TauriVideoSink(tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>);
+
+impl TauriVideoSink {
+    pub fn new(channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>) -> Arc<Self> {
+        Arc::new(Self(channel))
+    }
+}
+
+impl VideoFrameSink for TauriVideoSink {
+    fn send_frame(&self, payload: Vec<u8>) -> Result<(), String> {
+        self.0
+            .send(tauri::ipc::InvokeResponseBody::Raw(payload))
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// Бинарный канал кадров: фронт создаёт его командой `stream_video_attach`.
-pub type VideoChannelSlot = Arc<Mutex<Option<Channel<InvokeResponseBody>>>>;
+pub type VideoChannelSlot = client_core::VideoChannelSlot;
 
 /// Вместимость очереди кадров между насосом oto и декодер-таском. Достаточно
 /// на бёрсты депакетизатора (кадры приходят пачками после marker-бита) и на
@@ -282,13 +301,13 @@ pub async fn decode_and_draw_task(
             continue;
         };
         // Бинарный IPC: [u32 w][u32 h][jpeg…].
-        let channel = video_channel.lock().unwrap().clone();
-        if let Some(channel) = channel {
+        let sink = video_channel.lock().unwrap().clone();
+        if let Some(sink) = sink {
             let mut payload = Vec::with_capacity(8 + jpeg.len());
             payload.extend_from_slice(&width.to_le_bytes());
             payload.extend_from_slice(&height.to_le_bytes());
             payload.extend_from_slice(&jpeg);
-            if let Err(e) = channel.send(InvokeResponseBody::Raw(payload)) {
+            if let Err(e) = sink.send_frame(payload) {
                 // Фронт не attached / закрыл страницу — канал пере-attach'ится
                 // при открытии оверлея.
                 log::debug!("Stream video: канал кадров закрыт: {e}");
